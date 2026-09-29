@@ -15,6 +15,7 @@ import {
   FileText,
   Filter,
   LayoutDashboard,
+  LogOut,
   Menu,
   MoreHorizontal,
   PencilLine,
@@ -29,6 +30,7 @@ import {
   UsersRound,
   X,
 } from "lucide-react";
+import { useNavigate as useRouterNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -258,6 +260,7 @@ const VoucherPrint = ({ voucher }: { voucher: Voucher }) => (
 );
 
 const Index = () => {
+  const routerNavigate = useRouterNavigate();
   const [view, setView] = useState<View>("dashboard");
   const [vouchers, setVouchers] = useState<Voucher[]>(readVouchers);
   const [showComposer, setShowComposer] = useState(false);
@@ -341,6 +344,11 @@ const Index = () => {
     setShowMobileNav(false);
   };
 
+  const logout = async () => {
+    await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+    routerNavigate("/login", { replace: true });
+  };
+
   return (
     <div className="app-shell">
       <aside className={`sidebar ${showMobileNav ? "sidebar-open" : ""}`}>
@@ -369,7 +377,7 @@ const Index = () => {
           <div className="text-sm font-semibold">Keep every payment accounted for.</div>
           <p className="mt-1 text-[11px] leading-relaxed text-[#b9c2d2]">Create clean, signable vouchers your whole team can trust.</p>
         </div>
-        <div className="sidebar-user"><div className="avatar">TM</div><div className="min-w-0 flex-1"><div className="truncate text-xs font-semibold text-[#29344a]">Tezza Mutepeka</div><div className="text-[10px] text-[#8b94a5]">Finance Admin</div></div><MoreHorizontal size={17} className="text-[#929baa]" /></div>
+        <div className="sidebar-user"><div className="avatar">TM</div><div className="min-w-0 flex-1"><div className="truncate text-xs font-semibold text-[#29344a]">Tezza Mutepeka</div><div className="text-[10px] text-[#8b94a5]">Finance Admin</div></div><button className="row-more" onClick={logout} aria-label="Sign out"><LogOut size={17} /></button></div>
       </aside>
 
       <main className="main-content">
