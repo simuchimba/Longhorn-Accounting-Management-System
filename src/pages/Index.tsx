@@ -292,7 +292,6 @@ const Index = () => {
         setDepartments(loadedDepartments);
         setVouchers(((vouchersResponse.data || []) as DbVoucher[]).map((row) => mapVoucher(row, departmentMap)));
         setForm((current) => ({ ...current, preparedBy: loadedProfile?.full_name || displayName, department: current.department || loadedDepartments[0]?.name || "" }));
-        if ((loadedProfile?.role || "preparer") === "approver") setView("pending");
         if (!loadedDepartments.length) setNotice("No departments exist yet. Ask your workspace admin to add one before creating vouchers.");
       }
       setLoading(false);
