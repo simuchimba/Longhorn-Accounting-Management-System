@@ -350,6 +350,31 @@ const Index = () => {
   const updateField = (field: keyof VoucherForm, value: string) => setForm((current) => ({ ...current, [field]: field === "amount" ? Number(value) : value }));
   const amountWords = amountToWords(form.amount, form.currency);
 
+  const nextVoucherNo = async (dateStr: string, taken: Set<string>): Promise<string> => {
+    const d = new Date(`${dateStr}T00:00:00`);
+    const dd = String(d.getDate()).padStart(2, "0");
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const monthStart = `${d.getFullYear()}-${mm}-01`;
+    const nextStart = d.getMonth() === 11 ? `${d.getFullYear() + 1}-01-01` : `${d.getFullYear()}-${String(d.getMonth() + 2).padStart(2, "0")}-01`;
+    const { data } = await supabase.from("vouchers").select("voucher_no").gte("voucher_date", monthStart).lt("voucher_date", nextStart);
+    let seq = 0;
+    for (const row of ((data || []) as { voucher_no: string }[])) {
+      const m = /(\d{4})$/.exec(row.voucher_no || "");
+      if (m) seq = Math.max(seq, parseInt(m[1], 10));
+    }
+    for (let attempt = 0; attempt < 50; attempt++) {
+      seq += 1;
+      const candidate = `${dd}/${mm}/${String(seq).padStart(4, "0")}`;
+      if (!taken.has(candidate)) {
+        taken.add(candidate);
+        return candidate;
+      }
+    }
+    const fallback = `${dd}/${mm}/${Date.now().toString().slice(-4)}`;
+    taken.add(fallback);
+    return fallback;
+  };
+
   const createVoucher = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!canPrepare) { setNotice("Voucher creation is reserved for preparers."); return; }
@@ -358,9 +383,13 @@ const Index = () => {
       setNotice("Add the amount, department, payee, payment purpose and prepared by name to continue.");
       return;
     }
-    const voucherNo = `PV-${String(new Date(form.date).getFullYear()).slice(-2)}-${String(Date.now()).slice(-6)}`;
-    const { data, error } = await supabase.from("vouchers").insert({
-      voucher_no: voucherNo,
+    const taken = new Set(vouchers.map((v) => v.voucherNo));
+    let data: DbVoucher | null = null;
+    let error: { message: string; code?: string } | null = null;
+    for (let attempt = 0; attempt < 3 && !data; attempt++) {
+      const voucherNo = await nextVoucherNo(form.date, taken);
+      const result = await supabase.from("vouchers").insert({
+        voucher_no: voucherNo,
       voucher_date: form.date,
       amount: form.amount,
       currency: form.currency,
@@ -374,12 +403,22 @@ const Index = () => {
       prepared_by_name: form.preparedBy.trim(),
       approved_by_name: form.approvedBy.trim() || null,
       status: "Pending approval",
-    }).select().single();
-    if (error) {
-      setNotice(error.message);
+      }).select().single();
+      if (!result.error) {
+        data = result.data as DbVoucher;
+        error = null;
+      } else if (result.error.code === "23505") {
+        error = result.error;
+      } else {
+        error = result.error;
+        break;
+      }
+    }
+    if (error || !data) {
+      setNotice(error ? error.message : "Unable to create voucher.");
       return;
     }
-    const mapped = mapVoucher(data as DbVoucher, new Map(departments.map((department) => [department.id, department.name])));
+    const mapped = mapVoucher(data, new Map(departments.map((department) => [department.id, department.name])));
     setVouchers((current) => [mapped, ...current]);
     setForm({ ...emptyForm, preparedBy: displayName, department: selectedDepartment.name });
     setShowComposer(false);
@@ -556,14 +595,19 @@ const Index = () => {
     if (!valid.length) { setImportError("No valid rows to import."); return; }
     const fallbackDept = departments.find((d) => d.name === "General") || departments[0];
     if (!fallbackDept) { setImportError("No departments exist. Ask your workspace admin to add one first."); return; }
-    const usedNumbers = new Set(vouchers.map((v) => v.voucherNo));
-    const year = String(new Date().getFullYear()).slice(-2);
-    const stamp = Date.now().toString().slice(-6);
-    const payload = valid.map((rowData, index) => {
+    const taken = new Set(vouchers.map((v) => v.voucherNo));
+    const assigned = new Map<ImportRow, string>();
+    for (const rowData of valid) {
+      if (rowData.voucherNo && !taken.has(rowData.voucherNo)) {
+        taken.add(rowData.voucherNo);
+        assigned.set(rowData, rowData.voucherNo);
+      } else {
+        assigned.set(rowData, await nextVoucherNo(rowData.date, taken));
+      }
+    }
+    const payload = valid.map((rowData) => {
       const dept = departments.find((d) => d.name.toLowerCase() === rowData.department.toLowerCase()) || fallbackDept;
-      let voucherNo = rowData.voucherNo || `PV-${year}-${stamp}${index}`;
-      if (usedNumbers.has(voucherNo)) voucherNo = `${voucherNo}-${stamp}${index}`;
-      usedNumbers.add(voucherNo);
+      const voucherNo = assigned.get(rowData) || rowData.voucherNo;
       return {
         voucher_no: voucherNo, voucher_date: rowData.date, amount: rowData.amount, currency: rowData.currency,
         amount_in_words: amountToWords(rowData.amount, rowData.currency), paid_to: rowData.paidTo,
@@ -618,7 +662,7 @@ const Index = () => {
       </main>
 
       {showImporter && <div className="modal-backdrop" onMouseDown={() => setShowImporter(false)}><section className="composer" onMouseDown={(event) => event.stopPropagation()}><div className="composer-header"><div><div className="eyebrow"><span className="eyebrow-line" /> BULK IMPORT</div><h2>Import vouchers</h2><p>Upload a CSV of historical records. Required columns: date, amount, paid to, being payment. Optional: currency, payment method, reference, department, voucher no.</p></div><button className="close-button" onClick={() => setShowImporter(false)}><X size={20} /></button></div><div className="composer-form"><div className="form-grid"><label className="field"><span>CSV file</span><Input type="file" accept=".csv,text/csv" onChange={handleImportFile} /></label><label className="field"><span>Status for imported rows</span><select value={importStatus} onChange={(event) => setImportStatus(event.target.value as VoucherStatus)}><option>Pending approval</option><option>Approved</option><option>Draft</option></select></label></div>{importError && <div className="login-error"><LockKeyhole size={15} /><span>{importError}</span></div>}{importPreview.length > 0 && <div className="import-preview"><div className="selection-count">{importPreview.filter((r) => !r.error).length} of {importPreview.length} rows ready to import</div>{importPreview.filter((r) => r.error).slice(0, 5).map((r, i) => <div key={i} className="login-error"><LockKeyhole size={15} /><span>{r.error}</span></div>)}{importPreview.filter((r) => !r.error).slice(0, 5).map((r, i) => <div key={`ok-${i}`} className="department-row"><div className="flex-1"><b>{r.paidTo} · {r.currency} {r.amount.toLocaleString("en-US", { minimumFractionDigits: 2 })}</b><small>{r.date} · {r.department || "General"}{r.voucherNo ? ` · ${r.voucherNo}` : ""}</small></div></div>)}</div>}<div className="preview-actions" style={{ paddingLeft: 0, paddingRight: 0, background: "transparent", borderTop: 0 }}><Button className="cancel-button" onClick={() => { setShowImporter(false); setImportPreview([]); setImportError(""); }}>Cancel</Button><Button className="primary-action" disabled={!importPreview.some((r) => !r.error) || importing} onClick={confirmImport}><Upload size={16} /> {importing ? "Importing..." : "Confirm import"}</Button></div></div></section></div>}
-      {showComposer && <div className="modal-backdrop" onMouseDown={() => setShowComposer(false)}><section className="composer" onMouseDown={(event) => event.stopPropagation()}><div className="composer-header"><div><div className="eyebrow"><span className="eyebrow-line" /> NEW RECORD</div><h2>Create payment voucher</h2><p>Capture the details once. Keep the approval trail complete.</p></div><button className="close-button" onClick={() => setShowComposer(false)}><X size={20} /></button></div><form onSubmit={createVoucher} className="composer-form"><div className="form-section-title"><span>01</span><div><b>Payment details</b><small>What is being paid?</small></div></div><div className="form-grid"><label className="field wide"><span>Amount paid <em>*</em></span><div className="amount-input"><select value={form.currency} onChange={(event) => updateField("currency", event.target.value)}><option>ZMW</option><option>USD</option><option>GBP</option></select><Input type="number" min="0" step="0.01" value={form.amount || ""} onChange={(event) => updateField("amount", event.target.value)} placeholder="0.00" /></div></label><label className="field"><span>Payment date <em>*</em></span><div className="input-icon"><CalendarDays size={15} /><Input type="date" value={form.date} onChange={(event) => updateField("date", event.target.value)} /></div></label><label className="field"><span>Amount in words</span><div className="words-preview"><Sparkles size={14} /><span>{amountWords}</span></div></label><label className="field wide"><span>Amount paid to <em>*</em></span><Input value={form.paidTo} onChange={(event) => updateField("paidTo", event.target.value)} placeholder="e.g. Petty Cash or supplier name" /></label><label className="field wide"><span>Being payment for <em>*</em></span><textarea value={form.beingPayment} onChange={(event) => updateField("beingPayment", event.target.value)} placeholder="Describe the purpose of this payment" rows={2} /></label></div><div className="form-section-title divider"><span>02</span><div><b>Sign-off owners</b><small>Who prepares and approves the voucher?</small></div></div><div className="form-grid"><label className="field"><span>Prepared by <em>*</em></span><div className="input-icon"><UserRound size={15} /><Input value={form.preparedBy} readOnly /></div></label><label className="field"><span>Approved by</span><div className="input-icon"><ShieldCheck size={15} /><Input value={form.approvedBy} onChange={(event) => updateField("approvedBy", event.target.value)} placeholder="Approver name for signature" /></div></label></div>{notice && <div className="form-error">{notice}</div>}<div className="composer-footer"><span><ShieldCheck size={15} /> Saved securely in Supabase</span><div className="flex gap-2"><Button type="button" onClick={() => setShowComposer(false)} className="cancel-button">Cancel</Button><Button type="submit" className="primary-action">Create voucher <ArrowUpRight size={16} /></Button></div></div></form></section></div>}
+      {showComposer && <div className="modal-backdrop" onMouseDown={() => setShowComposer(false)}><section className="composer" onMouseDown={(event) => event.stopPropagation()}><div className="composer-header"><div><div className="eyebrow"><span className="eyebrow-line" /> NEW RECORD</div><h2>Create payment voucher</h2><p>Capture the details once. Keep the approval trail complete.</p></div><button className="close-button" onClick={() => setShowComposer(false)}><X size={20} /></button></div><form onSubmit={createVoucher} className="composer-form"><div className="form-section-title"><span>01</span><div><b>Payment details</b><small>What is being paid?</small></div></div><div className="form-grid"><label className="field wide"><span>Amount paid <em>*</em></span><div className="amount-input"><select value={form.currency} onChange={(event) => updateField("currency", event.target.value)}><option>ZMW</option><option>USD</option><option>GBP</option></select><Input type="number" min="0" step="0.01" value={form.amount || ""} onChange={(event) => updateField("amount", event.target.value)} placeholder="0.00" /></div></label><label className="field"><span>Payment date <em>*</em></span><div className="input-icon"><CalendarDays size={15} /><Input type="date" value={form.date} onChange={(event) => updateField("date", event.target.value)} /></div></label><label className="field"><span>Amount in words</span><div className="words-preview"><Sparkles size={14} /><span>{amountWords}</span></div></label><label className="field wide"><span>Amount paid to <em>*</em></span><Input value={form.paidTo} onChange={(event) => updateField("paidTo", event.target.value)} placeholder="e.g. Petty Cash or supplier name" /></label><label className="field wide"><span>Being payment for <em>*</em></span><textarea value={form.beingPayment} onChange={(event) => updateField("beingPayment", event.target.value)} placeholder="Describe the purpose of this payment" rows={2} /></label></div><div className="form-section-title divider"><span>02</span><div><b>Sign-off owners</b><small>Who prepares and approves the voucher?</small></div></div><div className="form-grid"><label className="field"><span>Prepared by <em>*</em></span><div className="input-icon"><UserRound size={15} /><Input value={form.preparedBy} readOnly /></div></label><label className="field"><span>Approved by</span><div className="input-icon"><ShieldCheck size={15} /><Input value={form.approvedBy} onChange={(event) => updateField("approvedBy", event.target.value)} placeholder={userRole === "preparer" ? "Set when approved" : "Approver name for signature"} disabled={userRole === "preparer"} /></div></label></div>{notice && <div className="form-error">{notice}</div>}<div className="composer-footer"><span><ShieldCheck size={15} /> Saved securely</span><div className="flex gap-2"><Button type="button" onClick={() => setShowComposer(false)} className="cancel-button">Cancel</Button><Button type="submit" className="primary-action">Create voucher <ArrowUpRight size={16} /></Button></div></div></form></section></div>}
 
       {activeVoucher && <div className="modal-backdrop" onMouseDown={() => setActiveVoucher(null)}><section className="preview-modal" onMouseDown={(event) => event.stopPropagation()}><div className="preview-header"><div><div className="eyebrow"><span className="eyebrow-line" /> VOUCHER PREVIEW</div><h2>{activeVoucher.voucherNo}</h2><p>Created {formatDate(activeVoucher.date)} · {activeVoucher.department}</p></div><div className="flex items-center gap-2"><StatusBadge status={activeVoucher.status} /><button className="close-button" onClick={() => setActiveVoucher(null)}><X size={20} /></button></div></div><div className="preview-paper"><VoucherPrint voucher={activeVoucher} /></div><div className="preview-actions"><Button className="cancel-button" onClick={() => setActiveVoucher(null)}>Close</Button>{activeVoucher.status === "Pending approval" && (userRole === "admin" || userRole === "approver") && <Button className="approve-button" onClick={() => approveVoucher(activeVoucher.id)}><Check size={16} /> Approve voucher</Button>}<Button className="primary-action" onClick={() => setPrintVouchers([activeVoucher])}><Download size={16} /> Export PDF</Button></div></section></div>}
       {printVouchers.length > 0 && <div className="print-only">{printVouchers.map((voucher) => <VoucherPrint key={voucher.id} voucher={voucher} />)}</div>}
