@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from "react";
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -35,7 +35,7 @@ import {
   UserRound,
   X,
 } from "lucide-react";
-import { useNavigate as useRouterNavigate } from "react-router-dom";
+import { useNavigate as useRouterNavigate, useSearchParams } from "react-router-dom";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -49,8 +49,13 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import Logo from "@/components/Logo";
+import AppShell, { type NavKey } from "@/components/AppShell";
+import ApprovalsPanel from "@/pages/ApprovalsPanel";
+import CompanyChip from "@/components/CompanyChip";
 import { supabase } from "@/integrations/supabase/client";
 import { useSessionContext } from "@/components/SessionContextProvider";
+import { bulkApproveVouchers, changeOwnEmail, fetchDirectory } from "@/lib/api";
+import type { Company, DirectoryMember, Voucher, VoucherStatus } from "@/lib/types";
 import {
   IMPORT_FILE_ACCEPT,
   IMPORT_FILE_HINT,
@@ -61,39 +66,12 @@ import {
   type ParsedImportSheet,
 } from "@/lib/spreadsheetImport";
 
-type VoucherStatus = "Draft" | "Pending approval" | "Approved";
-type View = "dashboard" | "pending" | "approved" | "settings";
+type View = "dashboard" | "approvals" | "pending" | "approved" | "settings";
 
 type Department = {
   id: string;
   name: string;
   description: string | null;
-};
-
-type Profile = {
-  full_name: string;
-  role: "admin" | "preparer" | "approver";
-  department_id: string | null;
-};
-
-type Voucher = {
-  id: string;
-  voucherNo: string;
-  date: string;
-  amount: number;
-  currency: string;
-  paidTo: string;
-  beingPayment: string;
-  amountWords: string;
-  paymentMethod: string;
-  reference: string;
-  department: string;
-  departmentId: string;
-  preparedBy: string;
-  preparedById: string;
-  approvedBy: string;
-  approvedById: string | null;
-  status: VoucherStatus;
 };
 
 type VoucherForm = {
@@ -106,7 +84,7 @@ type VoucherForm = {
   reference: string;
   department: string;
   preparedBy: string;
-  approvedBy: string;
+  approverId: string;
 };
 
 type DbVoucher = {
@@ -121,15 +99,23 @@ type DbVoucher = {
   payment_method: string;
   reference: string | null;
   department_id: string;
+  company_id: string | null;
   prepared_by: string;
   prepared_by_name: string;
   approved_by: string | null;
   approved_by_name: string | null;
   approved_at: string | null;
+  assigned_approver_id: string | null;
+  assigned_approver_name: string | null;
   status: VoucherStatus;
 };
 
+/** The columns the voucher list needs, including the multi-company ones. */
+const VOUCHER_COLUMNS =
+  "id, voucher_no, voucher_date, amount, currency, amount_in_words, paid_to, being_payment, payment_method, reference, department_id, company_id, prepared_by, prepared_by_name, approved_by, approved_by_name, approved_at, assigned_approver_id, assigned_approver_name, status";
+
 const paymentMethods = ["Bank transfer", "Petty cash", "Mobile money", "Cheque"];
+const ALL_COMPANIES = "All companies";
 const emptyForm: VoucherForm = {
   date: new Date().toISOString().slice(0, 10),
   amount: 0,
@@ -140,7 +126,7 @@ const emptyForm: VoucherForm = {
   reference: "",
   department: "",
   preparedBy: "",
-  approvedBy: "",
+  approverId: "",
 };
 
 const numberWords = [
@@ -212,29 +198,53 @@ const statusStyles: Record<VoucherStatus, string> = {
   Draft: "bg-[#eef0f5] text-[#5b6476] border-[#d8dce6]",
 };
 
-const mapVoucher = (row: DbVoucher, departmentMap: Map<string, string>): Voucher => ({
-  id: row.id,
-  voucherNo: row.voucher_no,
-  date: row.voucher_date,
-  amount: Number(row.amount),
-  currency: row.currency,
-  paidTo: row.paid_to,
-  beingPayment: row.being_payment,
-  amountWords: row.amount_in_words,
-  paymentMethod: row.payment_method,
-  reference: row.reference || "",
-  department: departmentMap.get(row.department_id) || "Unassigned",
-  departmentId: row.department_id,
-  preparedBy: row.prepared_by_name,
-  preparedById: row.prepared_by,
-  approvedBy: row.approved_by_name || "",
-  approvedById: row.approved_by,
-  status: row.status,
-});
+const mapVoucher = (row: DbVoucher, departmentMap: Map<string, string>, companyMap: Map<string, Company>): Voucher => {
+  const company = row.company_id ? companyMap.get(row.company_id) : undefined;
+  return {
+    id: row.id,
+    voucherNo: row.voucher_no,
+    date: row.voucher_date,
+    amount: Number(row.amount),
+    currency: row.currency,
+    paidTo: row.paid_to,
+    beingPayment: row.being_payment,
+    amountWords: row.amount_in_words,
+    paymentMethod: row.payment_method,
+    reference: row.reference || "",
+    department: departmentMap.get(row.department_id) || "Unassigned",
+    departmentId: row.department_id,
+    companyId: row.company_id ?? null,
+    companyName: company?.name || "",
+    companyCode: company?.code || "",
+    companyColor: company?.color || "#8490a5",
+    preparedBy: row.prepared_by_name,
+    preparedById: row.prepared_by,
+    approvedBy: row.approved_by_name || "",
+    approvedById: row.approved_by,
+    approvedAt: row.approved_at,
+    assignedApproverId: row.assigned_approver_id ?? null,
+    assignedApproverName: row.assigned_approver_name || "",
+    status: row.status,
+  };
+};
 
 const NavItem = ({ active, icon: Icon, label, onClick, count }: { active: boolean; icon: typeof LayoutDashboard; label: string; onClick: () => void; count?: number }) => (
   <button onClick={onClick} className={`nav-item ${active ? "nav-item-active" : ""}`}><Icon size={18} strokeWidth={active ? 2.3 : 1.8} /><span>{label}</span>{count !== undefined && <span className="ml-auto rounded-full bg-[#fff4f5] px-2 py-0.5 text-[10px] font-bold text-[#D71939]">{count}</span>}</button>
 );
+
+/** "2026-08" -> "August 2026". */
+const monthLabel = (month: string) =>
+  new Intl.DateTimeFormat("en-GB", { month: "long", year: "numeric" }).format(new Date(`${month}-01T00:00:00`));
+
+/** The three months a date input can step through, as `YYYY-MM`. */
+const monthValue = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+const shiftMonth = (month: string, by: number) => {
+  const [year, index] = month.split("-").map(Number);
+  return monthValue(new Date(year, index - 1 + by, 1));
+};
+
+/** True when a month is in the past or the current one, never a future month. */
+const isSettledMonth = (month: string, today = new Date()) => month <= monthValue(today);
 
 const StatusBadge = ({ status }: { status: VoucherStatus }) => <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${statusStyles[status]}`}><span className="h-1.5 w-1.5 rounded-full bg-current" />{status}</span>;
 
@@ -251,14 +261,27 @@ const VoucherPrint = ({ voucher }: { voucher: Voucher }) => (
 
 const Index = () => {
   const routerNavigate = useRouterNavigate();
-  const { session, user } = useSessionContext();
-  const [view, setView] = useState<View>("dashboard");
-  const [profile, setProfile] = useState<Profile | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const { session, user, profile, needsMigration, refreshProfile } = useSessionContext();
+  const [view, setView] = useState<View>(() => {
+    const requested = searchParams.get("view");
+    return requested === "pending" || requested === "approved" || requested === "settings" ? requested : "dashboard";
+  });
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [approvers, setApprovers] = useState<DirectoryMember[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [vouchers, setVouchers] = useState<Voucher[]>([]);
   const [loading, setLoading] = useState(true);
+  const [companyFilter, setCompanyFilter] = useState(ALL_COMPANIES);
   const [showComposer, setShowComposer] = useState(false);
   const [showMobileNav, setShowMobileNav] = useState(false);
+  // Monthly sign-off, approvers only.
+  const [approvalMonth, setApprovalMonth] = useState(monthValue(new Date()));
+  const [approvalSelected, setApprovalSelected] = useState<string[]>([]);
+  const [approvalSearch, setApprovalSearch] = useState("");
+  const [approvalDept, setApprovalDept] = useState("All departments");
+  const [bulkTarget, setBulkTarget] = useState<{ ids: string[]; label: string } | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
   const [form, setForm] = useState<VoucherForm>(emptyForm);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"All statuses" | VoucherStatus>("All statuses");
@@ -290,6 +313,7 @@ const Index = () => {
     department: "",
     includeReceipts: false,
   });
+  const [importApproverId, setImportApproverId] = useState("");
   const [activeVoucher, setActiveVoucher] = useState<Voucher | null>(null);
   const [printVouchers, setPrintVouchers] = useState<Voucher[]>([]);
   const [notice, setNotice] = useState("");
@@ -300,28 +324,50 @@ const Index = () => {
   const [undoIds, setUndoIds] = useState<string[]>([]);
   const [settingsName, setSettingsName] = useState("");
   const [settingsEmail, setSettingsEmail] = useState("");
+  const [emailPassword, setEmailPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [settingsBusy, setSettingsBusy] = useState<"name" | "email" | "password" | "">("");
 
-  const displayName = profile?.full_name || user?.user_metadata?.full_name || user?.email?.split("@")[0] || "Longhorn user";
+  const displayName = profile?.fullName || user?.user_metadata?.full_name || user?.email?.split("@")[0] || "Longhorn user";
   const userRole = profile?.role || "preparer";
-  const canPrepare = userRole !== "approver";
+  const canPrepare = profile?.canPrepare ?? userRole !== "approver";
+  const canApprove = profile?.isApprover ?? (userRole === "approver" || userRole === "admin");
+  const myCompanyId = profile?.companyId ?? null;
   const initials = getInitials(displayName);
   const todayLabel = new Intl.DateTimeFormat("en-GB", { weekday: "long", day: "2-digit", month: "long", year: "numeric" }).format(new Date());
   const dayHour = new Date().getHours();
   const greeting = dayHour < 5 || dayHour >= 17 ? "Good evening" : dayHour < 12 ? "Good morning" : "Good afternoon";
 
+  const departmentMap = useMemo(() => new Map(departments.map((department) => [department.id, department.name])), [departments]);
+  const companyMap = useMemo(() => new Map(companies.map((company) => [company.id, company])), [companies]);
+  const toVoucher = (row: DbVoucher) => mapVoucher(row, departmentMap, companyMap);
+
   useEffect(() => {
     if (!session || !user) return;
     const loadData = async () => {
       setLoading(true);
-      const [profileResponse, departmentsResponse, vouchersResponse] = await Promise.all([
-        supabase.from("profiles").select("full_name, role, department_id").eq("id", user.id).maybeSingle(),
+
+      // Companies and the approver list come from the server, which also resolves
+      // role. If the multi-company migration has not been run there is nothing to
+      // read yet, so fall back quietly and let the banner explain it.
+      const [directoryResult, departmentsResponse, vouchersResponse] = await Promise.all([
+        fetchDirectory().catch(() => null),
         supabase.from("departments").select("id, name, description").order("name"),
-        supabase.from("vouchers").select("*").order("voucher_date", { ascending: false }).order("created_at", { ascending: false }),
+        supabase.from("vouchers").select(VOUCHER_COLUMNS).order("voucher_date", { ascending: false }).order("created_at", { ascending: false }),
       ]);
-      const firstError = profileResponse.error || departmentsResponse.error || vouchersResponse.error;
+
+      // Older databases do not have the company columns yet. Fall back to the old
+      // column list so the ledger still loads instead of showing nothing.
+      let voucherRows = (vouchersResponse.data || []) as DbVoucher[];
+      let voucherError = vouchersResponse.error;
+      if (voucherError && /company_id|assigned_approver/i.test(voucherError.message)) {
+        const legacy = await supabase.from("vouchers").select("*").order("voucher_date", { ascending: false }).order("created_at", { ascending: false });
+        voucherRows = (legacy.data || []) as DbVoucher[];
+        voucherError = legacy.error;
+      }
+
+      const firstError = departmentsResponse.error || voucherError;
       if (firstError) {
         setNotice(firstError.message);
       } else {
@@ -330,12 +376,20 @@ const Index = () => {
           const { data: generalDepartment } = await supabase.from("departments").insert({ name: "General", description: "Default department" }).select("id, name, description").single();
           if (generalDepartment) loadedDepartments = [generalDepartment as Department];
         }
-        const departmentMap = new Map(loadedDepartments.map((department) => [department.id, department.name]));
-        const loadedProfile = profileResponse.data as Profile | null;
-        setProfile(loadedProfile);
+        const loadedCompanies = directoryResult?.companies ?? [];
+        setCompanies(loadedCompanies);
+        setApprovers(directoryResult?.approvers ?? []);
         setDepartments(loadedDepartments);
-        setVouchers(((vouchersResponse.data || []) as DbVoucher[]).map((row) => mapVoucher(row, departmentMap)));
-        setForm((current) => ({ ...current, preparedBy: loadedProfile?.full_name || displayName, department: current.department || loadedDepartments[0]?.name || "" }));
+
+        const nameFor = new Map<string, Company>(loadedCompanies.map((company) => [company.id, company]));
+        const mapped = voucherRows.map((row) => mapVoucher(row, new Map(loadedDepartments.map((department) => [department.id, department.name])), nameFor));
+        setVouchers(mapped);
+        setForm((current) => ({
+          ...current,
+          preparedBy: current.preparedBy || displayName,
+          department: current.department || loadedDepartments[0]?.name || "",
+        }));
+
         if (!loadedDepartments.length) setNotice("No departments exist yet. Ask your workspace admin to add one before creating vouchers.");
       }
       setLoading(false);
@@ -374,6 +428,20 @@ const Index = () => {
     };
   }, [printVouchers]);
 
+  // A preparer only ever receives their own branch's vouchers, so a branch
+  // filter is only meaningful for approvers and admins who can see them all.
+  const branchOptions = useMemo(
+    () => (canApprove ? companies.filter((company) => company.isActive) : companies.filter((company) => company.id === myCompanyId)),
+    [canApprove, companies, myCompanyId],
+  );
+  const selectedCompanyId = branchOptions.find((company) => company.name === companyFilter)?.id ?? null;
+  // Vouchers with no branch set yet still belong in an approver's list, so only
+  // drop them once a specific branch has been chosen.
+  const matchesBranch = useCallback(
+    (voucher: Voucher) => !selectedCompanyId || !voucher.companyId || voucher.companyId === selectedCompanyId,
+    [selectedCompanyId],
+  );
+
   const pendingCount = vouchers.filter((voucher) => voucher.status === "Pending approval").length;
   const approvedCount = vouchers.filter((voucher) => voucher.status === "Approved").length;
   const totalValue = vouchers.reduce((sum, voucher) => sum + voucher.amount, 0);
@@ -383,8 +451,8 @@ const Index = () => {
   const approvalRate = vouchers.length ? Math.round((approvedCount / vouchers.length) * 100) : 0;
   const filteredVouchers = useMemo(() => vouchers.filter((voucher) => voucher.status !== "Approved").filter((voucher) => {
     const searchable = `${voucher.voucherNo} ${voucher.paidTo} ${voucher.beingPayment} ${voucher.reference}`.toLowerCase();
-    return searchable.includes(search.toLowerCase()) && (statusFilter === "All statuses" || voucher.status === statusFilter) && (departmentFilter === "All departments" || voucher.department === departmentFilter) && (!dateFrom || voucher.date >= dateFrom) && (!dateTo || voucher.date <= dateTo);
-  }), [dateFrom, dateTo, departmentFilter, search, statusFilter, vouchers]);
+    return matchesBranch(voucher) && searchable.includes(search.toLowerCase()) && (statusFilter === "All statuses" || voucher.status === statusFilter) && (departmentFilter === "All departments" || voucher.department === departmentFilter) && (!dateFrom || voucher.date >= dateFrom) && (!dateTo || voucher.date <= dateTo);
+  }), [dateFrom, dateTo, departmentFilter, matchesBranch, search, statusFilter, vouchers]);
 
   const pendingPages = Math.max(1, Math.ceil(filteredVouchers.length / PAGE_SIZE));
   const safePage = Math.min(page, pendingPages);
@@ -429,8 +497,15 @@ const Index = () => {
     event.preventDefault();
     if (!canPrepare) { setNotice("Voucher creation is reserved for preparers."); return; }
     const selectedDepartment = departments.find((department) => department.name === form.department);
+    const chosenApprover = approvers.find((member) => member.id === form.approverId);
     if (!user || !selectedDepartment || !form.amount || !form.paidTo.trim() || !form.beingPayment.trim() || !form.preparedBy.trim()) {
       setNotice("Add the amount, department, payee, payment purpose and prepared by name to continue.");
+      return;
+    }
+    // The approver is nominated in the composer so the voucher lands with the
+    // right signatory straight away, instead of waiting for someone to route it.
+    if (!chosenApprover) {
+      setNotice("Choose who should approve this voucher before saving it.");
       return;
     }
     const taken = new Set(vouchers.map((v) => v.voucherNo));
@@ -449,11 +524,13 @@ const Index = () => {
       payment_method: form.paymentMethod,
       reference: form.reference.trim() || null,
       department_id: selectedDepartment.id,
+      company_id: myCompanyId,
       prepared_by: user.id,
       prepared_by_name: form.preparedBy.trim(),
-      approved_by_name: form.approvedBy.trim() || null,
+      assigned_approver_id: chosenApprover.id,
+      assigned_approver_name: chosenApprover.fullName,
       status: "Pending approval",
-      }).select().single();
+      }).select(VOUCHER_COLUMNS).single();
       if (!result.error) {
         data = result.data as DbVoucher;
         error = null;
@@ -468,12 +545,16 @@ const Index = () => {
       setNotice(error ? error.message : "Unable to create voucher.");
       return;
     }
-    const mapped = mapVoucher(data, new Map(departments.map((department) => [department.id, department.name])));
+    const mapped = mapVoucher(data, departmentMap, companyMap);
     setVouchers((current) => [mapped, ...current]);
     setForm({ ...emptyForm, preparedBy: displayName, department: selectedDepartment.name });
     setShowComposer(false);
     setView("pending");
-    setNotice(`${mapped.voucherNo} was saved and sent for approval.`);
+    setSearchParams({ view: "pending" }, { replace: true });
+    setNotice(
+      `${mapped.voucherNo} was saved and sent to ${chosenApprover.fullName} for approval.` +
+        (chosenApprover.companyName ? ` at ${chosenApprover.companyName}.` : "."),
+    );
   };
 
   const toggleSelected = (id: string) => setSelected((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
@@ -549,20 +630,22 @@ const explainDeleteError = (error: { message?: string } | null): string => {
       payment_method: row.payment_method,
       reference: row.reference ?? null,
       department_id: row.department_id,
+      company_id: row.company_id ?? null,
       prepared_by: row.prepared_by,
       prepared_by_name: row.prepared_by_name,
       approved_by: row.approved_by ?? null,
       approved_by_name: row.approved_by_name ?? null,
       approved_at: row.approved_at ?? null,
+      assigned_approver_id: row.assigned_approver_id ?? null,
+      assigned_approver_name: row.assigned_approver_name ?? null,
       status: row.status,
     }));
-    const { data, error } = await supabase.from("vouchers").insert(payload).select();
+    const { data, error } = await supabase.from("vouchers").insert(payload).select(VOUCHER_COLUMNS);
     setRestoring(false);
     setUndoRows([]);
     setUndoIds([]);
     if (error) { setNotice(`Could not restore those records: ${error.message}`); return; }
-    const departmentMap = new Map(departments.map((department) => [department.id, department.name]));
-    const restored = ((data || []) as DbVoucher[]).map((item) => mapVoucher(item, departmentMap));
+    const restored = ((data || []) as DbVoucher[]).map((item) => mapVoucher(item, departmentMap, companyMap));
     setVouchers((current) => [...restored, ...current]);
     setNotice(`${restored.length} voucher${restored.length === 1 ? "" : "s"} restored.`);
   };
@@ -575,30 +658,162 @@ const explainDeleteError = (error: { message?: string } | null): string => {
 
   const approveVoucher = async (id: string) => {
     if (!user) return;
-    const { data, error } = await supabase.from("vouchers").update({ status: "Approved", approved_by: user.id, approved_by_name: displayName, approved_at: new Date().toISOString() }).eq("id", id).select().single();
+    if (!canApprove) { setNotice("Voucher approval is reserved for approvers."); return; }
+    const { data, error } = await supabase.from("vouchers").update({ status: "Approved", approved_by: user.id, approved_by_name: displayName, approved_at: new Date().toISOString() }).eq("id", id).select(VOUCHER_COLUMNS).single();
     if (error) {
       setNotice(error.message);
       return;
     }
-    const updated = mapVoucher(data as DbVoucher, new Map(departments.map((department) => [department.id, department.name])));
+    const updated = mapVoucher(data as DbVoucher, departmentMap, companyMap);
     setVouchers((current) => current.map((voucher) => voucher.id === id ? updated : voucher));
     setActiveVoucher(updated);
     setNotice("Voucher approved. It is ready to export for signing.");
   };
 
+  /* ------------------------------------------------- monthly bulk approval */
+
+  /** Months that actually contain vouchers, newest first. */
+  const monthsWithVouchers = useMemo(() => {
+    const seen = new Set<string>();
+    for (const voucher of vouchers) seen.add(voucher.date.slice(0, 7));
+    return [...seen].sort().reverse();
+  }, [vouchers]);
+
+  // Point at the newest month that has something waiting, rather than a month
+  // that could be empty.
+  useEffect(() => {
+    if (!canApprove || !monthsWithVouchers.length) return;
+    const hasWaiting = monthsWithVouchers.some(
+      (month) => month === approvalMonth && vouchers.some((voucher) => voucher.date.slice(0, 7) === month && voucher.status === "Pending approval"),
+    );
+    if (!hasWaiting) {
+      const firstWaiting = monthsWithVouchers.find((month) => vouchers.some((voucher) => voucher.date.slice(0, 7) === month && voucher.status === "Pending approval"));
+      setApprovalMonth(firstWaiting ?? approvalMonth);
+    }
+  }, [approvalMonth, canApprove, monthsWithVouchers, vouchers]);
+
+  const approvalVouchers = useMemo(() => {
+    const term = approvalSearch.trim().toLowerCase();
+    return vouchers.filter((voucher) => {
+      if (voucher.status !== "Pending approval") return false;
+      if (voucher.date.slice(0, 7) !== approvalMonth) return false;
+      if (!matchesBranch(voucher)) return false;
+      if (approvalDept !== "All departments" && voucher.department !== approvalDept) return false;
+      if (!term) return true;
+      return `${voucher.voucherNo} ${voucher.paidTo} ${voucher.beingPayment} ${voucher.reference} ${voucher.preparedBy} ${voucher.assignedApproverName}`
+        .toLowerCase()
+        .includes(term);
+    });
+  }, [approvalDept, approvalMonth, approvalSearch, matchesBranch, vouchers]);
+
+  const approvalTotal = approvalVouchers.reduce((sum, voucher) => sum + voucher.amount, 0);
+  // Only allow ticking what can actually be approved, so the count always matches
+  // what the button will do.
+  const approvalSelectable = approvalVouchers.map((voucher) => voucher.id);
+  const approvalSelectedCount = approvalSelectable.filter((id) => approvalSelected.includes(id)).length;
+  const allApprovalSelected = approvalSelectable.length > 0 && approvalSelectedCount === approvalSelectable.length;
+  const approvalSelectedVouchers = approvalVouchers.filter((voucher) => approvalSelected.includes(voucher.id));
+  const approvalSelectedTotal = approvalSelectedVouchers.reduce((sum, voucher) => sum + voucher.amount, 0);
+  // Only completed months can be signed off in bulk: the current month is still
+  // collecting vouchers, so approving it wholesale would be premature.
+  const approvalMonthSettled = isSettledMonth(approvalMonth) && approvalMonth !== monthValue(new Date());
+
+  const toggleApprovalSelected = (id: string) =>
+    setApprovalSelected((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
+
+  const toggleAllApprovalSelected = () =>
+    setApprovalSelected((current) =>
+      allApprovalSelected
+        ? current.filter((id) => !approvalSelectable.includes(id))
+        : Array.from(new Set([...current, ...approvalSelectable])),
+    );
+
+  const clearApprovalSelection = () => setApprovalSelected([]);
+
+  const requestBulkApprove = (ids: string[]) => {
+    if (!canApprove) { setNotice("Voucher approval is reserved for approvers."); return; }
+    if (!ids.length) return;
+    if (!approvalMonthSettled) {
+      setNotice(`${monthLabel(approvalMonth)} is still open. Approve vouchers one at a time until the month closes.`);
+      return;
+    }
+    const value = approvalVouchers.filter((voucher) => ids.includes(voucher.id)).reduce((sum, voucher) => sum + voucher.amount, 0);
+    setBulkTarget({ ids, label: `${ids.length} voucher${ids.length === 1 ? "" : "s"} from ${monthLabel(approvalMonth)} worth ${formatMoney(value)}` });
+  };
+
+  /**
+   * Drops ticked rows that have left the visible set, e.g. after changing the
+   * month or a filter. `approvalSelectable` is rebuilt every render, so the ids
+   * are derived from the memoised list inside the effect instead of depending on
+   * the array identity.
+   */
+  useEffect(() => {
+    const visibleIds = new Set(approvalVouchers.map((voucher) => voucher.id));
+    setApprovalSelected((current) => {
+      const next = current.filter((id) => visibleIds.has(id));
+      return next.length === current.length ? current : next;
+    });
+  }, [approvalVouchers]);
+
+  const confirmBulkApprove = async () => {
+    if (!bulkTarget || bulkBusy) return;
+    const ids = bulkTarget.ids;
+    setBulkTarget(null);
+    if (!ids.length) return;
+    setBulkBusy(true);
+    setNotice("");
+    try {
+      const result = await bulkApproveVouchers(ids, approvalMonth);
+      const now = new Date().toISOString();
+      // Reflect the result locally so the list updates without a reload.
+      setVouchers((current) =>
+        current.map((voucher) =>
+          result.approved.some((row) => row.id === voucher.id)
+            ? { ...voucher, status: "Approved", approvedBy: result.approvedBy, approvedById: user?.id ?? null, approvedAt: now }
+            : voucher,
+        ) as Voucher[],
+      );
+      setApprovalSelected([]);
+
+      const parts = [`${result.approvedCount} voucher${result.approvedCount === 1 ? "" : "s"} approved.`];
+      if (result.skipped.length) parts.push(`${result.skipped.length} skipped: ${result.skipped.map((row) => `${row.voucherNo ?? "one"} (${row.reason})`).join(", ")}.`);
+      if (result.failed.length) parts.push(`${result.failed.length} could not be saved.`);
+      setNotice(parts.join(" "));
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Those vouchers could not be approved.");
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
   const openCreate = () => {
     if (!canPrepare) { setNotice("Voucher creation is reserved for preparers."); return; }
     setNotice("");
-    setForm({ ...emptyForm, date: new Date().toISOString().slice(0, 10), preparedBy: displayName, department: form.department || departments[0]?.name || "" });
+    // Default to an approver from the preparer's own branch, since that is who
+    // signs off their payments nine times out of ten.
+    const suggested = approvers.find((member) => member.companyId === myCompanyId) ?? approvers[0];
+    setForm({
+      ...emptyForm,
+      date: new Date().toISOString().slice(0, 10),
+      preparedBy: displayName,
+      department: form.department || departments[0]?.name || "",
+      approverId: suggested?.id ?? "",
+    });
     setShowComposer(true);
   };
-  const navigate = (nextView: View) => {
+  const navigate = (nextView: NavKey) => {
+    if (nextView === "admin") { routerNavigate("/admin"); return; }
+    // Approvers land on monthly sign-off, since that is their main job.
+    if (nextView === "approvals" && !canApprove) {
+      setNotice("Monthly sign-off is for approvers and admins.");
+      return;
+    }
     if (nextView === "settings") {
-      setSettingsName((current) => current || profile?.full_name || "");
+      setSettingsName((current) => current || profile?.fullName || "");
       setSettingsEmail((current) => current || user?.email || "");
     }
     setView(nextView);
-    setShowMobileNav(false);
+    setSearchParams(nextView === "dashboard" ? {} : { view: nextView }, { replace: true });
   };
   const saveDisplayName = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -612,21 +827,41 @@ const explainDeleteError = (error: { message?: string } | null): string => {
       setNotice(`Could not save name: ${error.message}`);
     } else {
       await supabase.auth.updateUser({ data: { full_name: name } });
-      setProfile((current) => (current ? { ...current, full_name: name } : current));
+      // Role and company are server-owned, so ask the server for the new name.
+      await refreshProfile();
       setNotice("Display name updated.");
     }
     setSettingsBusy("");
   };
+  /**
+   * Changes the sign-in email.
+   *
+   * Supabase's own email change only sends a confirmation link and leaves the stored
+   * address untouched until it is clicked. On this project's mail setup that link
+   * never arrives, so the address simply never changed. The server applies it
+   * directly instead, and asks for the current password first.
+   */
   const saveEmail = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const nextEmail = settingsEmail.trim();
     if (!nextEmail || nextEmail === user?.email) { setNotice("Enter a new email address."); return; }
+    if (!emailPassword) { setNotice("Enter your current password to confirm the email change."); return; }
     setSettingsBusy("email");
     setNotice("");
-    const { error } = await supabase.auth.updateUser({ email: nextEmail });
-    setSettingsBusy("");
-    if (error) setNotice(error.message);
-    else setNotice("Confirmation links sent. Your sign-in email changes once you confirm.");
+    try {
+      const result = await changeOwnEmail(nextEmail, emailPassword);
+      setEmailPassword("");
+      setSettingsEmail(result.email);
+      // The session still belongs to this person, but the address it reports has
+      // moved, so re-read it rather than leaving the old one on screen.
+      await supabase.auth.refreshSession();
+      await refreshProfile();
+      setNotice(`Sign-in email changed to ${result.email}. Use it next time you sign in.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not change that email address.");
+    } finally {
+      setSettingsBusy("");
+    }
   };
   const savePassword = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -679,8 +914,8 @@ const explainDeleteError = (error: { message?: string } | null): string => {
 
   const approvedVouchers = useMemo(() => vouchers.filter((voucher) => voucher.status === "Approved").filter((voucher) => {
     const searchable = `${voucher.voucherNo} ${voucher.paidTo} ${voucher.beingPayment} ${voucher.reference}`.toLowerCase();
-    return searchable.includes(approvedSearch.toLowerCase()) && (approvedDept === "All departments" || voucher.department === approvedDept) && (!approvedFrom || voucher.date >= approvedFrom) && (!approvedTo || voucher.date <= approvedTo);
-  }), [approvedDept, approvedFrom, approvedSearch, approvedTo, vouchers]);
+    return matchesBranch(voucher) && searchable.includes(approvedSearch.toLowerCase()) && (approvedDept === "All departments" || voucher.department === approvedDept) && (!approvedFrom || voucher.date >= approvedFrom) && (!approvedTo || voucher.date <= approvedTo);
+  }), [approvedDept, approvedFrom, approvedSearch, approvedTo, matchesBranch, vouchers]);
 
   const approvedPages = Math.max(1, Math.ceil(approvedVouchers.length / PAGE_SIZE));
   const safeApprovedPage = Math.min(approvedPage, approvedPages);
@@ -911,6 +1146,15 @@ const explainDeleteError = (error: { message?: string } | null): string => {
       const pool = await reserveVoucherNumbers(valid.map((row) => row.date));
       const now = new Date().toISOString();
       const approved = importStatus === "Approved";
+      // Bulk rows all go to one approver, so the importer asks for one up front.
+      const importApprover = approvers.find((member) => member.id === importApproverId)
+        ?? approvers.find((member) => member.companyId === myCompanyId)
+        ?? approvers[0];
+      if (!importApprover && importStatus !== "Approved") {
+        setImportError("Choose who should approve the imported rows, or ask an admin to add an approver.");
+        setImporting(false);
+        return;
+      }
       const payload = valid.map((row) => {
         const dept = departments.find((d) => d.name.toLowerCase() === row.department.trim().toLowerCase()) || fallbackDept;
         const amount = importRowAmount(row);
@@ -926,8 +1170,11 @@ const explainDeleteError = (error: { message?: string } | null): string => {
           payment_method: row.paymentMethod.trim() || "Bank transfer",
           reference: row.reference.trim() || null,
           department_id: dept.id,
+          company_id: myCompanyId,
           prepared_by: user.id,
           prepared_by_name: displayName,
+          assigned_approver_id: importApprover?.id ?? null,
+          assigned_approver_name: importApprover?.fullName ?? null,
           approved_by: approved ? user.id : null,
           approved_by_name: approved ? displayName : null,
           approved_at: approved ? now : null,
@@ -938,7 +1185,7 @@ const explainDeleteError = (error: { message?: string } | null): string => {
       const inserted: DbVoucher[] = [];
       for (let index = 0; index < payload.length; index += IMPORT_CHUNK) {
         const chunk = payload.slice(index, index + IMPORT_CHUNK);
-        const { data, error } = await supabase.from("vouchers").insert(chunk).select();
+        const { data, error } = await supabase.from("vouchers").insert(chunk).select(VOUCHER_COLUMNS);
         if (error) {
           setImportError(`Imported ${inserted.length} of ${payload.length} rows, then stopped: ${error.message}`);
           return;
@@ -948,7 +1195,7 @@ const explainDeleteError = (error: { message?: string } | null): string => {
       }
 
       const departmentMap = new Map(departments.map((department) => [department.id, department.name]));
-      const mapped = inserted.map((item) => mapVoucher(item, departmentMap));
+      const mapped = inserted.map((item) => mapVoucher(item, departmentMap, companyMap));
       setVouchers((current) => [...mapped, ...current]);
       const total = mapped.reduce((sum, voucher) => sum + voucher.amount, 0);
       setImportRows([]);
@@ -971,29 +1218,67 @@ const explainDeleteError = (error: { message?: string } | null): string => {
   if (loading) return <div className="auth-loading"><div className="auth-loading-mark"><ShieldCheck size={20} /></div><span>Loading your workspace...</span></div>;
 
   return (
-    <div className="app-shell">
-      <aside className={`sidebar ${showMobileNav ? "sidebar-open" : ""}`}>
-        <div className="flex items-center justify-between"><Logo /><button className="mobile-close" onClick={() => setShowMobileNav(false)} aria-label="Close navigation"><X size={20} /></button></div>
-        <div className="workspace-switcher"><div className="workspace-avatar">LA</div><div className="min-w-0"><div className="truncate text-xs font-bold text-[#1a253b]">Longhorn Associates</div><div className="mt-0.5 text-[10px] text-[#8490a5]">{userRole === "preparer" ? "Preparer workspace" : "Approval workspace"}</div></div><ChevronRight className="ml-auto text-[#a3abb9]" size={16} /></div>
-        <div className="sidebar-label">Workspace</div><nav className="space-y-1"><NavItem active={view === "dashboard"} icon={LayoutDashboard} label="Overview" onClick={() => navigate("dashboard")} /><NavItem active={view === "pending"} icon={FileText} label="Pending vouchers" count={pendingCount} onClick={() => navigate("pending")} /><NavItem active={view === "approved"} icon={FileCheck2} label="Approved vouchers" count={approvedCount} onClick={() => navigate("approved")} /></nav>
-        <div className="sidebar-label mt-8">Manage</div><nav className="space-y-1"><NavItem active={view === "settings"} icon={Settings2} label="Settings" onClick={() => navigate("settings")} /><NavItem active={false} icon={CircleHelp} label="Help centre" onClick={() => setNotice("Need help? Contact your workspace admin to update roles and departments.")} /></nav>
-        <div className="mt-auto rounded-2xl bg-[#182238] p-4 text-white shadow-lg shadow-[#182238]/10"><div className="mb-3 flex h-8 w-8 items-center justify-center rounded-xl bg-[#D71939]"><Sparkles size={16} /></div><div className="text-sm font-semibold">Keep every payment accounted for.</div><p className="mt-1 text-[11px] leading-relaxed text-[#b9c2d2]">Create clean, signable vouchers your whole team can trust.</p></div>
-        <div className="sidebar-user"><div className="avatar">{initials}</div><div className="min-w-0 flex-1"><div className="truncate text-xs font-semibold text-[#29344a]">{displayName}</div><div className="text-[10px] capitalize text-[#8b94a5]">{userRole}</div></div><button className="row-more" onClick={logout} aria-label="Sign out"><LogOut size={17} /></button></div>
-      </aside>
-
-      <main className="main-content"><header className="topbar"><button className="mobile-menu" onClick={() => setShowMobileNav(true)} aria-label="Open navigation"><Menu size={22} /></button><div className="hidden md:block"><div className="text-xs font-medium text-[#9aa3b2]">{todayLabel}</div><div className="mt-1 font-display text-lg font-semibold text-[#1a253b]">{greeting}, {displayName.split(" ")[0]} <span className="text-[#D71939]">↗</span></div></div><div className="ml-auto flex items-center gap-2 sm:gap-4"><button className="icon-button" aria-label="Notifications"><Bell size={18} /><span className="notification-dot" /></button><div className="topbar-separator" /><div className="hidden text-right sm:block"><div className="text-xs font-semibold text-[#29344a]">{displayName}</div><div className="text-[10px] capitalize text-[#9aa3b2]">{userRole}</div></div><div className="avatar">{initials}</div></div></header>
-        <div className="content-wrap">{notice && <div className="notice"><Check size={16} /><span>{notice}</span>{undoRows.length > 0 && <Button className="notice-action" onClick={undoDelete} disabled={restoring}><Undo2 size={14} />{restoring ? "Restoring..." : "Undo"}</Button>}<button onClick={dismissNotice} aria-label="Dismiss"><X size={15} /></button></div>}
+    <AppShell active={view} onNavigate={navigate} user={profile} counts={{ pending: pendingCount, approved: approvedCount }} onSignOut={logout} onHelp={() => setNotice("Need help? Contact your workspace admin to update roles, branches or access.")}>
+        <div>{needsMigration && <div className="notice notice-warn"><AlertTriangle size={16} /><span>Multi-company is not set up on this database yet. Run <b>database/multi_company_setup.sql</b> in the Supabase SQL editor to add branches and per-company voucher visibility.</span></div>}
+        {notice && <div className="notice"><Check size={16} /><span>{notice}</span>{undoRows.length > 0 && <Button className="notice-action" onClick={undoDelete} disabled={restoring}><Undo2 size={14} />{restoring ? "Restoring..." : "Undo"}</Button>}<button onClick={dismissNotice} aria-label="Dismiss"><X size={15} /></button></div>}
           {view === "dashboard" && <><div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> FINANCE CONTROL CENTRE</div><h1>Payment overview</h1><p>A live view of every voucher moving through Longhorn.</p></div>{canPrepare && <Button onClick={openCreate} className="primary-action"><Plus size={17} /> New voucher</Button>}</div>
             <section className="metric-grid"><div className="metric-card metric-card-dark"><div className="metric-icon"><Banknote size={17} /></div><div className="metric-label">{latestMonthLabel ? `${latestMonthLabel} value` : "Total voucher value"}</div><div className="metric-value">{formatMoney(latestMonthTotal)}</div><div className="metric-foot"><ArrowUpRight size={14} /> Live workspace data</div><div className="metric-watermark">ZMW</div></div><div className="metric-card"><div className="metric-icon soft-red"><Clock3 size={17} /></div><div className="metric-label">Awaiting approval</div><div className="metric-value text-[#1a253b]">{String(pendingCount).padStart(2, "0")}</div><div className="metric-foot muted-foot">Updated live</div>{pendingCount > 0 && <div className="metric-badge">Needs attention</div>}</div><div className="metric-card"><div className="metric-icon soft-green"><BadgeCheck size={17} /></div><div className="metric-label">Approved records</div><div className="metric-value text-[#1a253b]">{String(approvedCount).padStart(2, "0")}</div><div className="metric-foot muted-foot">{approvalRate}% signable records</div><div className="mini-bars"><i /><i /><i /><i /><i /></div></div><div className="metric-card metric-card-red"><div className="metric-icon"><FileCheck2 size={17} /></div><div className="metric-label">Records on file</div><div className="metric-value">{String(vouchers.length).padStart(2, "0")}</div><div className="metric-foot">Up to date</div><div className="record-ring"><span>+{vouchers.length}</span></div></div></section>
             <div className="dashboard-grid"><section className="panel recent-panel"><div className="panel-heading"><div><h2>Recent vouchers</h2><p>Your latest activity</p></div><button className="text-link" onClick={() => navigate("pending")}>View all <ArrowUpRight size={14} /></button></div>{vouchers.length ? <div className="table-wrap"><table><thead><tr><th>Voucher</th><th>Paid to</th><th>Amount</th><th>Status</th></tr></thead><tbody>{vouchers.slice(0, 4).map((voucher) => <tr key={voucher.id} onClick={() => setActiveVoucher(voucher)}><td><div className="voucher-id">{voucher.voucherNo}</div><div className="table-sub">{formatDate(voucher.date)}</div></td><td><div className="payee-cell"><div className="payee-icon">{voucher.paidTo.slice(0, 1)}</div><span>{voucher.paidTo}</span></div></td><td className="amount-cell">{formatMoney(voucher.amount, voucher.currency)}</td><td><StatusBadge status={voucher.status} /></td></tr>)}</tbody></table></div> : <div className="empty-state"><div className="empty-art"><FileText size={27} /></div><h3>No vouchers yet</h3><p>Create the first voucher for this workspace.</p>{canPrepare && <Button onClick={openCreate} className="secondary-action"><Plus size={16} /> Create voucher</Button>}</div>}</section><section className="panel action-panel"><div className="panel-heading"><div><h2>Quick actions</h2><p>Move work forward</p></div><SlidersHorizontal size={17} className="text-[#9ca5b5]" /></div>{canPrepare && <button className="quick-action" onClick={openCreate}><span className="quick-action-icon red"><FilePlus2 size={18} /></span><span><b>Create a voucher</b><small>Start a new payment record</small></span><ChevronRight size={17} /></button>}<button className="quick-action" onClick={() => navigate("pending")}><span className="quick-action-icon navy"><Download size={18} /></span><span><b>Export for signing</b><small>Print selected vouchers to PDF</small></span><ChevronRight size={17} /></button><button className="quick-action" onClick={() => navigate("settings")}><span className="quick-action-icon gold"><Settings2 size={18} /></span><span><b>Account settings</b><small>Update your profile</small></span><ChevronRight size={17} /></button></section></div>
             <section className="insight-banner"><div className="insight-icon"><Stamp size={20} /></div><div><div className="eyebrow text-[#e2a6ae]"><span className="eyebrow-line bg-[#e2a6ae]" /> WORKFLOW INSIGHT</div><h3>Every voucher tells a complete story.</h3><p>Keep payment purpose, reference and signatures together for faster month-end reviews.</p></div><div className="insight-stat"><b>{formatMoney(totalValue)}</b><span>tracked value</span></div></section></>}
 
-          {view === "pending" && <><div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> PENDING APPROVAL</div><h1>Pending vouchers</h1><p>Review pending items and prepare records for signing.</p></div>{canPrepare && <Button onClick={openCreate} className="primary-action"><Plus size={17} /> New voucher</Button>}</div><section className="panel archive-panel"><div className="archive-toolbar"><div className="search-box"><Search size={17} /><input value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="Search voucher, payee or reference..." /></div><div className="filter-row"><select value={statusFilter} onChange={(event) => { setStatusFilter(event.target.value as typeof statusFilter); setPage(1); }}><option value="All statuses">All pending</option><option>Pending approval</option><option>Draft</option></select><input type="date" value={dateFrom} max={dateTo || undefined} onChange={(event) => { setDateFrom(event.target.value); setPage(1); }} className="date-filter" aria-label="From date" title="From date" /><input type="date" value={dateTo} min={dateFrom || undefined} onChange={(event) => { setDateTo(event.target.value); setPage(1); }} className="date-filter" aria-label="To date" title="To date" /><button className="filter-button"><Filter size={15} /> <span className="hidden sm:inline">More filters</span></button></div></div><div className="selection-bar"><label className="check-control"><input type="checkbox" checked={pageSelected} onChange={toggleAll} /><span><Check size={12} /></span>Select all visible</label><span className="selection-count">{selected.length ? `${selected.length} selected` : `${filteredVouchers.length} records`}</span>{pageSelected && !everyFilteredSelected && filteredVouchers.length > pagedVouchers.length && <button className="select-all-link" onClick={toggleEveryFiltered}>Select all {filteredVouchers.length} vouchers</button>}{selected.length > 0 && <button className="select-all-link" onClick={clearSelected}>Clear selection</button>}<Button disabled={!selected.length} onClick={exportSelected} className="export-button"><Download size={15} /> Export selected PDF</Button>{canPrepare && <Button disabled={!selected.length} onClick={() => requestDelete(selected)} className="delete-button"><Trash2 size={15} /> Delete{selected.length ? ` (${selected.length})` : ""}</Button>}{canPrepare && <Button onClick={() => openImporter("Pending approval")} className="export-button"><Upload size={15} /> Import Excel / CSV</Button>}</div>{selected.length > 0 && <div className="selection-summary"><b>{selected.length} selected</b> worth {formatMoney(selectedTotal)}<span>{selectedVouchers.some((voucher) => voucher.status === "Draft") && ` · ${selectedVouchers.filter((voucher) => voucher.status === "Draft").length} draft`}</span></div>}<div className="table-wrap archive-table"><table><thead><tr><th className="check-col" /><th>Voucher no.</th><th>Paid to</th><th>Payment date</th><th>Amount</th><th>Status</th><th /></tr></thead><tbody>{pagedVouchers.map((voucher) => <tr key={voucher.id}><td className="check-col"><label className="check-control"><input type="checkbox" checked={selected.includes(voucher.id)} onChange={() => toggleSelected(voucher.id)} /><span><Check size={12} /></span></label></td><td><button className="voucher-link" onClick={() => setActiveVoucher(voucher)}>{voucher.voucherNo}</button><div className="table-sub">{voucher.reference || "No reference"}</div></td><td><div className="payee-cell"><div className="payee-icon">{voucher.paidTo.slice(0, 1)}</div><span>{voucher.paidTo}</span></div></td><td className="muted-cell">{formatDate(voucher.date)}</td><td className="amount-cell">{formatMoney(voucher.amount, voucher.currency)}</td><td><StatusBadge status={voucher.status} /></td><td><div className="row-actions">{canPrepare && <button className="row-more row-more-danger" onClick={() => requestDelete([voucher.id])} aria-label={`Delete ${voucher.voucherNo}`} title={`Delete ${voucher.voucherNo}`}><Trash2 size={16} /></button>}<button className="row-more" onClick={() => setActiveVoucher(voucher)} aria-label={`View ${voucher.voucherNo}`}><MoreHorizontal size={18} /></button></div></td></tr>)}</tbody></table>{!filteredVouchers.length && <div className="empty-state"><div className="empty-art"><FileText size={27} /></div><h3>No vouchers match these filters</h3><p>Try a different search or create a new payment record.</p>{canPrepare && <Button onClick={openCreate} className="secondary-action"><Plus size={16} /> Create voucher</Button>}</div>}{filteredVouchers.length > PAGE_SIZE && <div className="pagination-bar"><span className="page-info">Page {safePage} of {pendingPages} · {filteredVouchers.length} records</span><div className="page-buttons"><button className="page-button" disabled={safePage <= 1} onClick={() => setPage(safePage - 1)}>Previous</button>{pageNumbers(safePage, pendingPages).map((n) => <button key={n} className={`page-button${n === safePage ? " page-button-active" : ""}`} onClick={() => setPage(n)}>{n}</button>)}<button className="page-button" disabled={safePage >= pendingPages} onClick={() => setPage(safePage + 1)}>Next</button></div></div>}</div></section></>}
-          {view === "approved" && <><div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> SIGNED ARCHIVE</div><h1>Approved vouchers</h1><p>Search and export signed records for your files.</p></div></div><section className="panel archive-panel"><div className="archive-toolbar"><div className="search-box"><Search size={17} /><input value={approvedSearch} onChange={(event) => { setApprovedSearch(event.target.value); setApprovedPage(1); }} placeholder="Search voucher, payee or reference..." /></div><div className="filter-row"><input type="date" value={approvedFrom} max={approvedTo || undefined} onChange={(event) => { setApprovedFrom(event.target.value); setApprovedPage(1); }} className="date-filter" aria-label="From date" title="From date" /><input type="date" value={approvedTo} min={approvedFrom || undefined} onChange={(event) => { setApprovedTo(event.target.value); setApprovedPage(1); }} className="date-filter" aria-label="To date" title="To date" /></div></div><div className="selection-bar"><label className="check-control"><input type="checkbox" checked={approvedPageSelected} onChange={toggleAllApproved} /><span><Check size={12} /></span>Select all visible</label><span className="selection-count">{approvedSelected.length ? `${approvedSelected.length} selected` : `${approvedVouchers.length} records`}</span>{approvedPageSelected && !everyApprovedSelected && approvedVouchers.length > pagedApproved.length && <button className="select-all-link" onClick={toggleEveryApproved}>Select all {approvedVouchers.length} vouchers</button>}{approvedSelected.length > 0 && <button className="select-all-link" onClick={() => setApprovedSelected([])}>Clear selection</button>}<Button disabled={!approvedSelected.length} onClick={exportApproved} className="export-button"><Download size={15} /> Export selected PDF</Button>{canPrepare && <Button disabled={!approvedSelected.length} onClick={() => requestDelete(approvedSelected)} className="delete-button"><Trash2 size={15} /> Delete{approvedSelected.length ? ` (${approvedSelected.length})` : ""}</Button>}{canPrepare && <Button onClick={() => openImporter("Approved")} className="export-button"><Upload size={15} /> Import Excel / CSV</Button>}</div><div className="table-wrap archive-table"><table><thead><tr><th className="check-col" /><th>Voucher no.</th><th>Paid to</th><th>Payment date</th><th>Amount</th><th>Status</th><th /></tr></thead><tbody>{pagedApproved.map((voucher) => <tr key={voucher.id}><td className="check-col"><label className="check-control"><input type="checkbox" checked={approvedSelected.includes(voucher.id)} onChange={() => toggleApproved(voucher.id)} /><span><Check size={12} /></span></label></td><td><button className="voucher-link" onClick={() => setActiveVoucher(voucher)}>{voucher.voucherNo}</button><div className="table-sub">{voucher.reference || "No reference"}</div></td><td><div className="payee-cell"><div className="payee-icon">{voucher.paidTo.slice(0, 1)}</div><span>{voucher.paidTo}</span></div></td><td className="muted-cell">{formatDate(voucher.date)}</td><td className="amount-cell">{formatMoney(voucher.amount)}</td><td><StatusBadge status={voucher.status} /></td><td><div className="row-actions">{canPrepare && <button className="row-more row-more-danger" onClick={() => requestDelete([voucher.id])} aria-label={`Delete ${voucher.voucherNo}`} title={`Delete ${voucher.voucherNo}`}><Trash2 size={16} /></button>}<button className="row-more" onClick={() => setActiveVoucher(voucher)} aria-label={`View ${voucher.voucherNo}`}><MoreHorizontal size={18} /></button></div></td></tr>)}</tbody></table>{!approvedVouchers.length && <div className="empty-state"><div className="empty-art"><FileText size={27} /></div><h3>No approved vouchers yet</h3><p>Approved items move here automatically.</p></div>}{approvedVouchers.length > PAGE_SIZE && <div className="pagination-bar"><span className="page-info">Page {safeApprovedPage} of {approvedPages} · {approvedVouchers.length} records</span><div className="page-buttons"><button className="page-button" disabled={safeApprovedPage <= 1} onClick={() => setApprovedPage(safeApprovedPage - 1)}>Previous</button>{pageNumbers(safeApprovedPage, approvedPages).map((n) => <button key={n} className={`page-button${n === safeApprovedPage ? " page-button-active" : ""}`} onClick={() => setApprovedPage(n)}>{n}</button>)}<button className="page-button" disabled={safeApprovedPage >= approvedPages} onClick={() => setApprovedPage(safeApprovedPage + 1)}>Next</button></div></div>}</div></section></>}
+          {view === "approvals" && canApprove && (
+            <ApprovalsPanel
+              vouchers={approvalVouchers}
+              companies={companies}
+              branchOptions={branchOptions}
+              companyFilter={companyFilter}
+              onCompanyFilterChange={(value) => { setCompanyFilter(value); setApprovalSelected([]); }}
+              month={approvalMonth}
+              onMonthChange={(value) => { setApprovalMonth(value); setApprovalSelected([]); }}
+              monthsWithVouchers={monthsWithVouchers}
+              search={approvalSearch}
+              onSearchChange={setApprovalSearch}
+              department={approvalDept}
+              onDepartmentChange={(value) => { setApprovalDept(value); setApprovalSelected([]); }}
+              departments={departments.map((item) => item.name)}
+              selected={approvalSelected}
+              onToggle={toggleApprovalSelected}
+              onToggleAll={toggleAllApprovalSelected}
+              onClearSelection={clearApprovalSelection}
+              allSelected={allApprovalSelected}
+              selectableCount={approvalSelectable.length}
+              selectedCount={approvalSelectedCount}
+              totalValue={approvalTotal}
+              selectedTotal={approvalSelectedTotal}
+              monthSettled={approvalMonthSettled}
+              canApprove={canApprove}
+              onApproveAll={() => requestBulkApprove(approvalSelectable.filter((id) => approvalSelected.includes(id)))}
+              onApproveOne={(voucher) => { setBulkTarget({ ids: [voucher.id], label: `${voucher.voucherNo} · ${formatMoney(voucher.amount, voucher.currency)}` }); }}
+              formatMoney={formatMoney}
+              formatDate={formatDate}
+            />
+          )}
 
-{view === "settings" && <><div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> ACCOUNT SETTINGS</div><h1>Settings</h1><p>Update your profile and sign-in credentials. Changes apply immediately.</p></div></div><div className="team-grid"><section className="panel team-summary"><div className="summary-hero"><div className="avatar" style={{ width: 46, height: 46, fontSize: 16 }}>{initials}</div><div><h2>{displayName}</h2><p>{user?.email || "No email on file"}</p></div><span className="admin-pill capitalize">{userRole}</span></div><div className="team-stat-row"><div><b>{userRole === "admin" || userRole === "approver" ? "Yes" : "No"}</b><span>Can approve</span></div><div><b>{departments.length}</b><span>Departments</span></div><div><b>{vouchers.filter((voucher) => voucher.preparedById === (user?.id || "")).length}</b><span>Prepared by you</span></div></div><div className="role-note"><ShieldCheck size={16} /><span><b>Secure workspace</b><small>Contact your workspace admin to change roles or departments.</small></span></div></section><section className="panel settings-panel"><div className="panel-heading"><div><h2>Sign-in &amp; profile</h2><p>Your account credentials</p></div><Settings2 size={17} className="text-[#9ca5b5]" /></div><div className="form-section-title"><span>01</span><div><b>Display name</b><small>Shown on vouchers you prepare</small></div></div><form onSubmit={saveDisplayName} className="grid gap-3"><label className="field"><span>Full name</span><Input value={settingsName} onChange={(event) => setSettingsName(event.target.value)} placeholder="Your full name" required /></label><div><Button type="submit" disabled={settingsBusy === "name"} className="secondary-action">{settingsBusy === "name" ? "Saving..." : "Save name"}</Button></div></form><div className="form-section-title divider"><span>02</span><div><b>Email address</b><small>Used for sign-in</small></div></div><form onSubmit={saveEmail} className="grid gap-3"><label className="field"><span>Email address</span><Input type="email" value={settingsEmail} onChange={(event) => setSettingsEmail(event.target.value)} placeholder="you@longhorn-associates.com" required /></label><div><Button type="submit" disabled={settingsBusy === "email"} className="secondary-action">{settingsBusy === "email" ? "Sending..." : "Change email"}</Button></div></form><div className="form-section-title divider"><span>03</span><div><b>Password</b><small>Minimum 6 characters</small></div></div><form onSubmit={savePassword} className="grid gap-3"><label className="field"><span>New password</span><Input type="password" autoComplete="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="Enter a new password" required /></label><label className="field"><span>Confirm new password</span><Input type="password" autoComplete="new-password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} placeholder="Repeat the new password" required /></label><div><Button type="submit" disabled={settingsBusy === "password"} className="secondary-action">{settingsBusy === "password" ? "Updating..." : "Update password"}</Button></div></form></section></div></>}
+          {view === "pending" && <><div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> PENDING APPROVAL</div><h1>Pending vouchers</h1><p>Review pending items and prepare records for signing.</p></div>{canPrepare && <Button onClick={openCreate} className="primary-action"><Plus size={17} /> New voucher</Button>}</div><section className="panel archive-panel"><div className="archive-toolbar"><div className="search-box"><Search size={17} /><input value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="Search voucher, payee or reference..." /></div><div className="filter-row">{canApprove && branchOptions.length > 1 && <select value={companyFilter} onChange={(event) => { setCompanyFilter(event.target.value); setPage(1); }} title="Filter by branch" aria-label="Filter by branch"><option value={ALL_COMPANIES}>{ALL_COMPANIES}</option>{branchOptions.map((company) => <option key={company.id} value={company.name}>{company.name}</option>)}</select>}<select value={statusFilter} onChange={(event) => { setStatusFilter(event.target.value as typeof statusFilter); setPage(1); }}><option value="All statuses">All pending</option><option>Pending approval</option><option>Draft</option></select><input type="date" value={dateFrom} max={dateTo || undefined} onChange={(event) => { setDateFrom(event.target.value); setPage(1); }} className="date-filter" aria-label="From date" title="From date" /><input type="date" value={dateTo} min={dateFrom || undefined} onChange={(event) => { setDateTo(event.target.value); setPage(1); }} className="date-filter" aria-label="To date" title="To date" /><button className="filter-button"><Filter size={15} /> <span className="hidden sm:inline">More filters</span></button></div></div><div className="selection-bar"><label className="check-control"><input type="checkbox" checked={pageSelected} onChange={toggleAll} /><span><Check size={12} /></span>Select all visible</label><span className="selection-count">{selected.length ? `${selected.length} selected` : `${filteredVouchers.length} records`}</span>{pageSelected && !everyFilteredSelected && filteredVouchers.length > pagedVouchers.length && <button className="select-all-link" onClick={toggleEveryFiltered}>Select all {filteredVouchers.length} vouchers</button>}{selected.length > 0 && <button className="select-all-link" onClick={clearSelected}>Clear selection</button>}<Button disabled={!selected.length} onClick={exportSelected} className="export-button"><Download size={15} /> Export selected PDF</Button>{canPrepare && <Button disabled={!selected.length} onClick={() => requestDelete(selected)} className="delete-button"><Trash2 size={15} /> Delete{selected.length ? ` (${selected.length})` : ""}</Button>}{canPrepare && <Button onClick={() => openImporter("Pending approval")} className="export-button"><Upload size={15} /> Import Excel / CSV</Button>}</div>{selected.length > 0 && <div className="selection-summary"><b>{selected.length} selected</b> worth {formatMoney(selectedTotal)}<span>{selectedVouchers.some((voucher) => voucher.status === "Draft") && ` · ${selectedVouchers.filter((voucher) => voucher.status === "Draft").length} draft`}</span></div>}<div className="table-wrap archive-table"><table><thead><tr><th className="check-col" /><th>Voucher no.</th><th>Paid to</th><th>Payment date</th><th>Amount</th><th>Status</th><th /></tr></thead><tbody>{pagedVouchers.map((voucher) => <tr key={voucher.id}><td className="check-col"><label className="check-control"><input type="checkbox" checked={selected.includes(voucher.id)} onChange={() => toggleSelected(voucher.id)} /><span><Check size={12} /></span></label></td><td><button className="voucher-link" onClick={() => setActiveVoucher(voucher)}>{voucher.voucherNo}</button><div className="table-sub">{voucher.reference || "No reference"}</div></td><td><div className="payee-cell"><div className="payee-icon">{voucher.paidTo.slice(0, 1)}</div><span>{voucher.paidTo}</span></div></td><td className="muted-cell">{formatDate(voucher.date)}</td><td className="amount-cell">{formatMoney(voucher.amount, voucher.currency)}</td><td><StatusBadge status={voucher.status} /></td><td><div className="row-actions">{canPrepare && <button className="row-more row-more-danger" onClick={() => requestDelete([voucher.id])} aria-label={`Delete ${voucher.voucherNo}`} title={`Delete ${voucher.voucherNo}`}><Trash2 size={16} /></button>}<button className="row-more" onClick={() => setActiveVoucher(voucher)} aria-label={`View ${voucher.voucherNo}`}><MoreHorizontal size={18} /></button></div></td></tr>)}</tbody></table>{!filteredVouchers.length && <div className="empty-state"><div className="empty-art"><FileText size={27} /></div><h3>No vouchers match these filters</h3><p>Try a different search or create a new payment record.</p>{canPrepare && <Button onClick={openCreate} className="secondary-action"><Plus size={16} /> Create voucher</Button>}</div>}{filteredVouchers.length > PAGE_SIZE && <div className="pagination-bar"><span className="page-info">Page {safePage} of {pendingPages} · {filteredVouchers.length} records</span><div className="page-buttons"><button className="page-button" disabled={safePage <= 1} onClick={() => setPage(safePage - 1)}>Previous</button>{pageNumbers(safePage, pendingPages).map((n) => <button key={n} className={`page-button${n === safePage ? " page-button-active" : ""}`} onClick={() => setPage(n)}>{n}</button>)}<button className="page-button" disabled={safePage >= pendingPages} onClick={() => setPage(safePage + 1)}>Next</button></div></div>}</div></section></>}
+          {view === "approved" && <><div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> SIGNED ARCHIVE</div><h1>Approved vouchers</h1><p>Search and export signed records for your files.</p></div></div><section className="panel archive-panel"><div className="archive-toolbar"><div className="search-box"><Search size={17} /><input value={approvedSearch} onChange={(event) => { setApprovedSearch(event.target.value); setApprovedPage(1); }} placeholder="Search voucher, payee or reference..." /></div><div className="filter-row">{canApprove && branchOptions.length > 1 && <select value={companyFilter} onChange={(event) => { setCompanyFilter(event.target.value); setApprovedPage(1); }} title="Filter by branch" aria-label="Filter by branch"><option value={ALL_COMPANIES}>{ALL_COMPANIES}</option>{branchOptions.map((company) => <option key={company.id} value={company.name}>{company.name}</option>)}</select>}<input type="date" value={approvedFrom} max={approvedTo || undefined} onChange={(event) => { setApprovedFrom(event.target.value); setApprovedPage(1); }} className="date-filter" aria-label="From date" title="From date" /><input type="date" value={approvedTo} min={approvedFrom || undefined} onChange={(event) => { setApprovedTo(event.target.value); setApprovedPage(1); }} className="date-filter" aria-label="To date" title="To date" /></div></div><div className="selection-bar"><label className="check-control"><input type="checkbox" checked={approvedPageSelected} onChange={toggleAllApproved} /><span><Check size={12} /></span>Select all visible</label><span className="selection-count">{approvedSelected.length ? `${approvedSelected.length} selected` : `${approvedVouchers.length} records`}</span>{approvedPageSelected && !everyApprovedSelected && approvedVouchers.length > pagedApproved.length && <button className="select-all-link" onClick={toggleEveryApproved}>Select all {approvedVouchers.length} vouchers</button>}{approvedSelected.length > 0 && <button className="select-all-link" onClick={() => setApprovedSelected([])}>Clear selection</button>}<Button disabled={!approvedSelected.length} onClick={exportApproved} className="export-button"><Download size={15} /> Export selected PDF</Button>{canPrepare && <Button disabled={!approvedSelected.length} onClick={() => requestDelete(approvedSelected)} className="delete-button"><Trash2 size={15} /> Delete{approvedSelected.length ? ` (${approvedSelected.length})` : ""}</Button>}{canPrepare && <Button onClick={() => openImporter("Approved")} className="export-button"><Upload size={15} /> Import Excel / CSV</Button>}</div><div className="table-wrap archive-table"><table><thead><tr><th className="check-col" /><th>Voucher no.</th><th>Paid to</th><th>Payment date</th><th>Amount</th><th>Status</th><th /></tr></thead><tbody>{pagedApproved.map((voucher) => <tr key={voucher.id}><td className="check-col"><label className="check-control"><input type="checkbox" checked={approvedSelected.includes(voucher.id)} onChange={() => toggleApproved(voucher.id)} /><span><Check size={12} /></span></label></td><td><button className="voucher-link" onClick={() => setActiveVoucher(voucher)}>{voucher.voucherNo}</button><div className="table-sub">{voucher.reference || "No reference"}</div></td><td><div className="payee-cell"><div className="payee-icon">{voucher.paidTo.slice(0, 1)}</div><span>{voucher.paidTo}</span></div></td><td className="muted-cell">{formatDate(voucher.date)}</td><td className="amount-cell">{formatMoney(voucher.amount)}</td><td><StatusBadge status={voucher.status} /></td><td><div className="row-actions">{canPrepare && <button className="row-more row-more-danger" onClick={() => requestDelete([voucher.id])} aria-label={`Delete ${voucher.voucherNo}`} title={`Delete ${voucher.voucherNo}`}><Trash2 size={16} /></button>}<button className="row-more" onClick={() => setActiveVoucher(voucher)} aria-label={`View ${voucher.voucherNo}`}><MoreHorizontal size={18} /></button></div></td></tr>)}</tbody></table>{!approvedVouchers.length && <div className="empty-state"><div className="empty-art"><FileText size={27} /></div><h3>No approved vouchers yet</h3><p>Approved items move here automatically.</p></div>}{approvedVouchers.length > PAGE_SIZE && <div className="pagination-bar"><span className="page-info">Page {safeApprovedPage} of {approvedPages} · {approvedVouchers.length} records</span><div className="page-buttons"><button className="page-button" disabled={safeApprovedPage <= 1} onClick={() => setApprovedPage(safeApprovedPage - 1)}>Previous</button>{pageNumbers(safeApprovedPage, approvedPages).map((n) => <button key={n} className={`page-button${n === safeApprovedPage ? " page-button-active" : ""}`} onClick={() => setApprovedPage(n)}>{n}</button>)}<button className="page-button" disabled={safeApprovedPage >= approvedPages} onClick={() => setApprovedPage(safeApprovedPage + 1)}>Next</button></div></div>}</div></section></>}
+
+{view === "settings" && <><div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> ACCOUNT SETTINGS</div><h1>Settings</h1><p>Update your profile and sign-in credentials. Changes apply immediately.</p></div></div><div className="team-grid"><section className="panel team-summary"><div className="summary-hero"><div className="avatar" style={{ width: 46, height: 46, fontSize: 16 }}>{initials}</div><div><h2>{displayName}</h2><p>{user?.email || "No email on file"}</p></div><span className="admin-pill capitalize">{userRole}</span>{profile?.company && <CompanyChip name={profile.company.name} code={profile.company.code} color={profile.company.color} variant="code" className="ml-2" />}</div><div className="team-stat-row"><div><b>{canApprove ? "Yes" : "No"}</b><span>Can approve</span></div><div><b>{departments.length}</b><span>Departments</span></div><div><b>{vouchers.filter((voucher) => voucher.preparedById === (user?.id || "")).length}</b><span>Prepared by you</span></div></div><div className="role-note"><ShieldCheck size={16} /><span><b>Your access</b><small>{profile?.company?.name ? `You work for ${profile.company.name}. ` : ""}{canApprove ? "You can see every branch’s vouchers." : "You see only your own branch’s vouchers."} Contact your workspace admin to change your role or branch.</small></span></div></section><section className="panel settings-panel"><div className="panel-heading"><div><h2>Sign-in &amp; profile</h2><p>Your account credentials</p></div><Settings2 size={17} className="text-[#9ca5b5]" /></div><div className="form-section-title"><span>01</span><div><b>Display name</b><small>Shown on vouchers you prepare</small></div></div><form onSubmit={saveDisplayName} className="grid gap-3"><label className="field"><span>Full name</span><Input value={settingsName} onChange={(event) => setSettingsName(event.target.value)} placeholder="Your full name" required /></label><div><Button type="submit" disabled={settingsBusy === "name"} className="secondary-action">{settingsBusy === "name" ? "Saving..." : "Save name"}</Button></div></form><div className="form-section-title divider"><span>02</span><div><b>Sign-in email</b><small>What you sign in with</small></div></div>
+<form onSubmit={saveEmail} className="grid gap-3">
+<label className="field"><span>Email address</span>
+<Input type="email" value={settingsEmail} onChange={(event) => setSettingsEmail(event.target.value)} placeholder="you@longhorn-associates.com" required />
+</label>
+<label className="field"><span>Current password <em>*</em></span>
+<Input type="password" autoComplete="current-password" value={emailPassword} onChange={(event) => setEmailPassword(event.target.value)} placeholder="Confirm it is you" required />
+<small className="field-hint">Required so a borrowed session cannot redirect your account. Your new address takes effect straight away.</small>
+</label>
+<div>
+<Button type="submit" disabled={settingsBusy === "email"} className="secondary-action">
+{settingsBusy === "email" ? "Updating..." : "Update email"}
+</Button>
+</div>
+</form>
+<div className="form-section-title divider"><span>03</span><div><b>Password</b><small>Minimum 6 characters</small></div></div><form onSubmit={savePassword} className="grid gap-3"><label className="field"><span>New password</span><Input type="password" autoComplete="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="Enter a new password" required /></label><label className="field"><span>Confirm new password</span><Input type="password" autoComplete="new-password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} placeholder="Repeat the new password" required /></label><div><Button type="submit" disabled={settingsBusy === "password"} className="secondary-action">{settingsBusy === "password" ? "Updating..." : "Update password"}</Button></div></form></section></div></>}
         </div>
-      </main>
 
 {showImporter && (
         <div className="modal-backdrop" onMouseDown={closeImporter}>
@@ -1074,6 +1359,15 @@ const explainDeleteError = (error: { message?: string } | null): string => {
                       </select>
                     </label>
                     <label className="field">
+                      <span>Approve with</span>
+                      <select value={importApproverId} onChange={(event) => setImportApproverId(event.target.value)}>
+                        <option value="">Closest branch approver</option>
+                        {approvers.map((member) => (
+                          <option key={member.id} value={member.id}>{member.fullName} ({member.companyCode || "No branch"})</option>
+                        ))}
+                      </select>
+                    </label>
+<label className="field">
                       <span>Department for these rows</span>
                       <select value={importDefaults.department} onChange={(event) => patchImportDefaults("department", event.target.value)}>
                         {departments.length === 0 && <option value="">No departments yet</option>}
@@ -1218,10 +1512,48 @@ const explainDeleteError = (error: { message?: string } | null): string => {
           </section>
         </div>
       )}
-      {showComposer && <div className="modal-backdrop" onMouseDown={() => setShowComposer(false)}><section className="composer" onMouseDown={(event) => event.stopPropagation()}><div className="composer-header"><div><div className="eyebrow"><span className="eyebrow-line" /> NEW RECORD</div><h2>Create payment voucher</h2><p>Capture the details once. Keep the approval trail complete.</p></div><button className="close-button" onClick={() => setShowComposer(false)}><X size={20} /></button></div><form onSubmit={createVoucher} className="composer-form"><div className="form-section-title"><span>01</span><div><b>Payment details</b><small>What is being paid?</small></div></div><div className="form-grid"><label className="field wide"><span>Amount paid <em>*</em></span><div className="amount-input"><select value={form.currency} onChange={(event) => updateField("currency", event.target.value)}><option>ZMW</option><option>USD</option><option>GBP</option></select><Input type="number" min="0" step="0.01" value={form.amount || ""} onChange={(event) => updateField("amount", event.target.value)} placeholder="0.00" /></div></label><label className="field"><span>Payment date <em>*</em></span><div className="input-icon"><CalendarDays size={15} /><Input type="date" value={form.date} onChange={(event) => updateField("date", event.target.value)} /></div></label><label className="field"><span>Amount in words</span><div className="words-preview"><Sparkles size={14} /><span>{amountWords}</span></div></label><label className="field wide"><span>Amount paid to <em>*</em></span><Input value={form.paidTo} onChange={(event) => updateField("paidTo", event.target.value)} placeholder="e.g. Petty Cash or supplier name" /></label><label className="field wide"><span>Being payment for <em>*</em></span><textarea value={form.beingPayment} onChange={(event) => updateField("beingPayment", event.target.value)} placeholder="Describe the purpose of this payment" rows={2} /></label></div><div className="form-section-title divider"><span>02</span><div><b>Sign-off owners</b><small>Who prepares and approves the voucher?</small></div></div><div className="form-grid"><label className="field"><span>Prepared by <em>*</em></span><div className="input-icon"><UserRound size={15} /><Input value={form.preparedBy} readOnly /></div></label><label className="field"><span>Approved by</span><div className="input-icon"><ShieldCheck size={15} /><Input value={form.approvedBy} onChange={(event) => updateField("approvedBy", event.target.value)} placeholder={userRole === "preparer" ? "Set when approved" : "Approver name for signature"} disabled={userRole === "preparer"} /></div></label></div>{notice && <div className="form-error">{notice}</div>}<div className="composer-footer"><span><ShieldCheck size={15} /> Saved securely</span><div className="flex gap-2"><Button type="button" onClick={() => setShowComposer(false)} className="cancel-button">Cancel</Button><Button type="submit" className="primary-action">Create voucher <ArrowUpRight size={16} /></Button></div></div></form></section></div>}
+      {showComposer && <div className="modal-backdrop" onMouseDown={() => setShowComposer(false)}><section className="composer" onMouseDown={(event) => event.stopPropagation()}><div className="composer-header"><div><div className="eyebrow"><span className="eyebrow-line" /> NEW RECORD</div><h2>Create payment voucher</h2><p>Capture the details once. Keep the approval trail complete.</p></div><div className="composer-branch-note">{profile?.company && <CompanyChip name={profile.company.name} code={profile.company.code} color={profile.company.color} variant="full" />}<span>Saving to your branch</span></div><button className="close-button" onClick={() => setShowComposer(false)}><X size={20} /></button></div><form onSubmit={createVoucher} className="composer-form"><div className="form-section-title"><span>01</span><div><b>Payment details</b><small>What is being paid?</small></div></div><div className="form-grid"><label className="field wide"><span>Amount paid <em>*</em></span><div className="amount-input"><select value={form.currency} onChange={(event) => updateField("currency", event.target.value)}><option>ZMW</option><option>USD</option><option>GBP</option></select><Input type="number" min="0" step="0.01" value={form.amount || ""} onChange={(event) => updateField("amount", event.target.value)} placeholder="0.00" /></div></label><label className="field"><span>Payment date <em>*</em></span><div className="input-icon"><CalendarDays size={15} /><Input type="date" value={form.date} onChange={(event) => updateField("date", event.target.value)} /></div></label><label className="field"><span>Amount in words</span><div className="words-preview"><Sparkles size={14} /><span>{amountWords}</span></div></label><label className="field wide"><span>Amount paid to <em>*</em></span><Input value={form.paidTo} onChange={(event) => updateField("paidTo", event.target.value)} placeholder="e.g. Petty Cash or supplier name" /></label><label className="field wide"><span>Being payment for <em>*</em></span><textarea value={form.beingPayment} onChange={(event) => updateField("beingPayment", event.target.value)} placeholder="Describe the purpose of this payment" rows={2} /></label></div><div className="form-section-title divider"><span>02</span><div><b>Sign-off owners</b><small>Who prepares and approves the voucher?</small></div></div><div className="form-grid"><label className="field"><span>Prepared by <em>*</em></span><div className="input-icon"><UserRound size={15} /><Input value={form.preparedBy} readOnly /></div></label><label className="field"><span>Send to approver <em>*</em></span><div className="input-icon"><ShieldCheck size={15} /><select value={form.approverId} onChange={(event) => updateField("approverId", event.target.value)} required><option value="">Choose an approver...</option>{approvers.map((member) => (<option key={member.id} value={member.id}>{member.fullName} ({member.companyCode || "No branch"}{member.role === "admin" ? " · Admin" : ""})</option>))}</select></div><small className="field-hint">They approve this voucher across all branches. Your own branch is listed first.</small></label></div>{notice && <div className="form-error">{notice}</div>}<div className="composer-footer"><span><ShieldCheck size={15} /> Saved securely</span><div className="flex gap-2"><Button type="button" onClick={() => setShowComposer(false)} className="cancel-button">Cancel</Button><Button type="submit" className="primary-action">Create voucher <ArrowUpRight size={16} /></Button></div></div></form></section></div>}
 
-      {activeVoucher && <div className="modal-backdrop" onMouseDown={() => setActiveVoucher(null)}><section className="preview-modal" onMouseDown={(event) => event.stopPropagation()}><div className="preview-header"><div><div className="eyebrow"><span className="eyebrow-line" /> VOUCHER PREVIEW</div><h2>{activeVoucher.voucherNo}</h2><p>Created {formatDate(activeVoucher.date)} · {activeVoucher.department}</p></div><div className="flex items-center gap-2"><StatusBadge status={activeVoucher.status} /><button className="close-button" onClick={() => setActiveVoucher(null)}><X size={20} /></button></div></div><div className="preview-paper"><VoucherPrint voucher={activeVoucher} /></div><div className="preview-actions"><Button className="cancel-button" onClick={() => setActiveVoucher(null)}>Close</Button>{activeVoucher.status === "Pending approval" && (userRole === "admin" || userRole === "approver") && <Button className="approve-button" onClick={() => approveVoucher(activeVoucher.id)}><Check size={16} /> Approve voucher</Button>}<Button className="primary-action" onClick={() => setPrintVouchers([activeVoucher])}><Download size={16} /> Export PDF</Button></div></section></div>}
+      {activeVoucher && <div className="modal-backdrop" onMouseDown={() => setActiveVoucher(null)}><section className="preview-modal" onMouseDown={(event) => event.stopPropagation()}><div className="preview-header"><div><div className="eyebrow"><span className="eyebrow-line" /> VOUCHER PREVIEW</div><h2>{activeVoucher.voucherNo}</h2><p>Created {formatDate(activeVoucher.date)} · {activeVoucher.department}</p></div><div className="flex flex-wrap items-center justify-end gap-2"><CompanyChip name={activeVoucher.companyName} code={activeVoucher.companyCode} color={activeVoucher.companyColor} variant="full" /><StatusBadge status={activeVoucher.status} /><button className="close-button" onClick={() => setActiveVoucher(null)}><X size={20} /></button></div></div><div className="preview-paper"><VoucherPrint voucher={activeVoucher} /></div><div className="preview-actions"><Button className="cancel-button" onClick={() => setActiveVoucher(null)}>Close</Button>{activeVoucher.status === "Pending approval" && canApprove && <Button className="approve-button" onClick={() => approveVoucher(activeVoucher.id)}><Check size={16} /> Approve voucher</Button>}<Button className="primary-action" onClick={() => setPrintVouchers([activeVoucher])}><Download size={16} /> Export PDF</Button></div></section></div>}
       {printVouchers.length > 0 && <div className="print-only">{printVouchers.map((voucher) => <VoucherPrint key={voucher.id} voucher={voucher} />)}</div>}
+
+      <AlertDialog
+        open={bulkTarget !== null}
+        onOpenChange={(open) => { if (!open && !bulkBusy) setBulkTarget(null); }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <span className="delete-dialog-icon" style={{ background: "#e5f4ec", color: "#197447" }}>
+                <Stamp size={17} />
+              </span>
+              Approve {bulkTarget?.label}?
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="delete-dialog-body">
+                <p>
+                  These vouchers will be marked <b>Approved</b> and stamped with your name and today's date. They
+                  become ready to export for signing straight away.
+                </p>
+                <p className="delete-dialog-hint">
+                  Only vouchers still in <b>Pending approval</b> from {monthLabel(approvalMonth)} are touched. Anything
+                  that changed while this dialog was open is skipped and reported back.
+                </p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={bulkBusy}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="approve-button"
+              disabled={bulkBusy}
+              onClick={(event) => { event.preventDefault(); void confirmBulkApprove(); }}
+            >
+              {bulkBusy ? "Approving..." : "Yes, approve them"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => { if (!open && !deleting) setDeleteTarget(null); }}>
         <AlertDialogContent>
@@ -1250,7 +1582,7 @@ const explainDeleteError = (error: { message?: string } | null): string => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </AppShell>
   );
 };
 

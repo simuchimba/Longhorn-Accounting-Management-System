@@ -31,3 +31,8 @@ dist-ssr
 /playwright/.cache/
 .last-run.json
 .dyad/
+
+# Lock files Excel and Word leave behind while a document is open. Transient,
+# never worth committing, and they only appear while someone has the file open.
+~$*
+.~lock.*#
