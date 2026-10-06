@@ -15,6 +15,8 @@ type SessionContextValue = {
   profileError: string;
   /** True when database/multi_company_setup.sql still needs to be run. */
   needsMigration: boolean;
+  /** True when the server has no Supabase credentials at all. */
+  setupRequired: boolean;
   refreshProfile: () => Promise<void>;
 };
 
@@ -26,6 +28,7 @@ const SessionContext = createContext<SessionContextValue>({
   profileLoading: false,
   profileError: "",
   needsMigration: false,
+  setupRequired: false,
   refreshProfile: async () => {},
 });
 
@@ -36,6 +39,7 @@ export const SessionContextProvider = ({ children }: { children: ReactNode }) =>
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileError, setProfileError] = useState("");
   const [needsMigration, setNeedsMigration] = useState(false);
+  const [setupRequired, setSetupRequired] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -69,8 +73,17 @@ export const SessionContextProvider = ({ children }: { children: ReactNode }) =>
     try {
       const data = await fetchMe();
       setProfile(data.user);
-      setNeedsMigration(data.needsMigration || data.setupRequired);
-      setProfileError(data.setupRequired ? "The ledger server has no Supabase keys configured yet." : "");
+      // Keep the two conditions apart: a missing migration is fixed in the SQL
+      // editor, missing credentials in the deployment environment.
+      setNeedsMigration(data.needsMigration);
+      setSetupRequired(data.setupRequired);
+      setProfileError(
+        data.setupRequired
+          ? "the ledger server has no Supabase credentials configured."
+          : data.user
+            ? ""
+            : "no profile row exists for your account. Ask an admin to add you in the admin panel.",
+      );
     } catch (error) {
       setProfile(null);
       if (error instanceof ApiError && error.status === 401) {
@@ -90,8 +103,8 @@ export const SessionContextProvider = ({ children }: { children: ReactNode }) =>
   }, [session, refreshProfile]);
 
   const value = useMemo(
-    () => ({ session, user: session?.user || null, profile, loading, profileLoading, profileError, needsMigration, refreshProfile }),
-    [loading, needsMigration, profile, profileError, profileLoading, refreshProfile, session],
+    () => ({ session, user: session?.user || null, profile, loading, profileLoading, profileError, needsMigration, setupRequired, refreshProfile }),
+    [loading, needsMigration, profile, profileError, profileLoading, refreshProfile, session, setupRequired],
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

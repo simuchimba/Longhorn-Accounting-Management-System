@@ -68,6 +68,16 @@ const bulkCode = read("server/routes/api/vouchers/bulk-approve.post.ts")
   .join("\n");
 check("bulk approve writes no updated_at column", !/updated_at/.test(bulkCode));
 
+// --- a missing credential must not masquerade as a missing migration ---------
+const meRoute = read("server/routes/api/me.get.ts");
+const provider = read("src/components/SessionContextProvider.tsx");
+check("unconfigured server reports setupRequired, not needsMigration", /needsMigration: false,\s*\n\s*setupRequired: true,/.test(meRoute));
+check("provider tracks the two conditions separately", /setNeedsMigration\(data\.needsMigration\)/.test(provider) && /setSetupRequired\(data\.setupRequired\)/.test(provider));
+check("provider never folds setupRequired into needsMigration", !/setNeedsMigration\(data\.needsMigration \|\| data\.setupRequired\)/.test(provider));
+check("a missing profile is reported distinctly", /no profile row exists for your account/.test(provider));
+check("Index shows a credential-specific notice", /NITRO_SUPABASE_URL/.test(index));
+check("Index still shows the migration notice when it applies", /multi_company_setup\.sql/.test(index));
+
 // --- adding a person must not clash with the signup trigger ------------------
 const addUser = read("server/routes/api/admin/users.post.ts");
 check("add-person upserts the profile, not a plain insert", /\.upsert\(/.test(addUser) && /onConflict:\s*"id"/.test(addUser));

@@ -11,9 +11,12 @@ import { isSupabaseConfigured, requireCaller } from "../../utils/supabase";
  */
 export default defineHandler(async (event) => {
   if (!isSupabaseConfigured()) {
+    // Not the same problem as a missing migration, and must not be reported as one.
+    // needsMigration stays false so the UI tells the truth: the server has no
+    // database credentials, which is fixed in Vercel, not in the SQL editor.
     return {
       user: null,
-      needsMigration: true,
+      needsMigration: false,
       setupRequired: true,
     };
   }
