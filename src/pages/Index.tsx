@@ -1160,8 +1160,10 @@ const explainDeleteError = (error: { message?: string } | null): string => {
       const importApprover = approvers.find((member) => member.id === importApproverId)
         ?? approvers.find((member) => member.companyId === myCompanyId)
         ?? approvers[0];
-      if (!importApprover && importStatus !== "Approved") {
-        setImportError("Choose who should approve the imported rows, or ask an admin to add an approver.");
+      if (!importApprover) {
+        // Every status needs an approver on record, and importing as "Approved"
+        // credits that approver, so the picker is required either way.
+        setImportError("Choose who should approve the imported rows, or ask an admin to promote someone to approver.");
         setImporting(false);
         return;
       }
@@ -1185,8 +1187,11 @@ const explainDeleteError = (error: { message?: string } | null): string => {
           prepared_by_name: displayName,
           assigned_approver_id: importApprover?.id ?? null,
           assigned_approver_name: importApprover?.fullName ?? null,
-          approved_by: approved ? user.id : null,
-          approved_by_name: approved ? displayName : null,
+          // The nominated approver is credited, never the person running the
+          // import. Stamping the importer here is what put an admin's name on
+          // hundreds of Longhorn Associates vouchers.
+          approved_by: approved ? importApprover?.id ?? null : null,
+          approved_by_name: approved ? importApprover?.fullName ?? null : null,
           approved_at: approved ? now : null,
           status: importStatus,
         };

@@ -36,3 +36,8 @@ dist-ssr
 # never worth committing, and they only appear while someone has the file open.
 ~$*
 .~lock.*#
+
+# Scratch files psql writes when a verification script redirects its echo output
+# so the real check results stay readable. Harmless, regenerated on every run.
+attr_fix_output.txt
+fix_quiet_output.txt

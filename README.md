@@ -136,6 +136,15 @@ backend all run with no signed-in user, so they were mistaken for an attack and 
 edits were silently reverted. A write with no signed-in user is now treated as trusted,
 and a *signed-in* non-admin is still protected, which is the case that matters.
 
+### 6. If an approver's name is wrong on existing vouchers
+
+Run `database/fix_approver_attribution.sql` in the SQL Editor. Section 1 is read-only and
+prints the current attribution per branch, so you can check before changing anything.
+
+It repoints Longhorn Associates vouchers whose approver is not someone with the approver
+role, and leaves rows already attributed to a genuine approver alone. Voucher dates,
+amounts and the original `approved_at` are never touched. Idempotent.
+
 ## Verifying the rules locally
 
 The migration can be tested without touching Supabase. This builds a throwaway database,
