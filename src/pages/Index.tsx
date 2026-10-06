@@ -551,7 +551,7 @@ const Index = () => {
       }
     }
     if (error || !data) {
-      setNotice(error ? error.message : "Unable to create voucher.");
+      setNotice(explainWriteError(error));
       return;
     }
     const mapped = mapVoucher(data, departmentMap, companyMap);
@@ -679,9 +679,34 @@ const explainDeleteError = (error: { message?: string } | null): string => {
     setNotice("Voucher approved. It is ready to export for signing.");
   };
 
-  /* ------------------------------------------------- monthly bulk approval */
+  /**
+ * Turns a Postgres refusal into something the user can act on.
+ *
+ * The duplicate guard and the unique voucher_no both raise 23505, so the code
+ * alone cannot tell them apart; the message text is what identifies them.
+ */
+  const explainWriteError = (error: { message?: string; code?: string } | null): string => {
+    const message = error?.message || "";
+    if (/already exists \(/.test(message) || /already been recorded/i.test(message)) {
+      // The guard names the voucher it clashed with, so keep that part.
+      const clash = /\(([^)]+)\)/.exec(message);
+      return clash
+        ? `That payment looks like it has already been entered, on voucher ${clash[1]}. Check the date and amount, or change one of them if this really is a separate payment.`
+        : "That payment looks like it has already been entered. Check the date and amount, or change one of them if this really is a separate payment.";
+    }
+    if (/invoice reference/i.test(message)) {
+      return "That invoice reference has already been used in this branch. Each invoice should only be paid once.";
+    }
+    if (/duplicate key value violates unique constraint/i.test(message)) {
+      return "That voucher number is already taken. Close the form and try again to get the next one.";
+    }
+    if (/permission denied|row-level security|row level security/i.test(message)) {
+      return "Your role is not allowed to do that. Ask a workspace admin if you expected to be able to.";
+    }
+    return message ? `Could not save: ${message}` : "Could not save that record.";
+  };
 
-  /** Months that actually contain vouchers, newest first. */
+  /* ------------------------------------------------- monthly bulk approval */
   const monthsWithVouchers = useMemo(() => {
     const seen = new Set<string>();
     for (const voucher of vouchers) seen.add(voucher.date.slice(0, 7));
@@ -1202,7 +1227,7 @@ const explainDeleteError = (error: { message?: string } | null): string => {
         const chunk = payload.slice(index, index + IMPORT_CHUNK);
         const { data, error } = await supabase.from("vouchers").insert(chunk).select(VOUCHER_COLUMNS);
         if (error) {
-          setImportError(`Imported ${inserted.length} of ${payload.length} rows, then stopped: ${error.message}`);
+          setImportError(`Imported ${inserted.length} of ${payload.length} rows, then stopped. ${explainWriteError(error)}`);
           return;
         }
         inserted.push(...((data || []) as DbVoucher[]));

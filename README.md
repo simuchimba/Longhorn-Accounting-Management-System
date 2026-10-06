@@ -145,6 +145,23 @@ It repoints Longhorn Associates vouchers whose approver is not someone with the 
 role, and leaves rows already attributed to a genuine approver alone. Voucher dates,
 amounts and the original `approved_at` are never touched. Idempotent.
 
+### 7. Stop the same payment being entered twice
+
+Run `database/find_duplicate_vouchers.sql` first — it is read-only and reports where the same
+invoice reference, or the same payee for the same amount on the same day, already repeats.
+
+Then run `database/prevent_duplicate_vouchers.sql`. It installs the guard only once the
+ledger is clean, and refuses with a count if it is not.
+
+What it blocks:
+
+- the same invoice reference twice in one branch
+- the same payee for the same amount on the same day, in one branch
+
+What it deliberately does **not** block: several payments on the same date. Paying fuel, a
+courier and airtime on one morning is normal, and enforcing one voucher per date would stop
+real payments. A duplicate is the same invoice paid twice, not two payments on one day.
+
 ## Verifying the rules locally
 
 The migration can be tested without touching Supabase. This builds a throwaway database,
