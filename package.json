@@ -13,7 +13,8 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "start": "node .output/server/index.mjs",
-    "test:email": "node scripts/check-email-change.mjs"
+    "test:email": "node scripts/check-email-change.mjs",
+    "test:help": "node scripts/check-help.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.0",

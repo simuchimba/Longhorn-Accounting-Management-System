@@ -17,7 +17,7 @@ import {
 import Logo from "@/components/Logo";
 import type { CurrentUser } from "@/lib/types";
 
-export type NavKey = "dashboard" | "approvals" | "pending" | "approved" | "settings" | "admin";
+export type NavKey = "dashboard" | "approvals" | "pending" | "approved" | "settings" | "admin" | "help";
 
 type AppShellProps = {
   active: NavKey;
@@ -25,7 +25,6 @@ type AppShellProps = {
   user: CurrentUser | null;
   counts?: { pending?: number; approved?: number };
   onSignOut: () => void;
-  onHelp?: () => void;
   children: ReactNode;
 };
 
@@ -69,7 +68,7 @@ const getInitials = (name: string) =>
  * for, so a Longhorn Financial Services preparer can tell at a glance that they
  * are inside the LFS books and not the group-wide ones.
  */
-const AppShell = ({ active, onNavigate, user, counts, onSignOut, onHelp, children }: AppShellProps) => {
+const AppShell = ({ active, onNavigate, user, counts, onSignOut, children }: AppShellProps) => {
   const [navOpen, setNavOpen] = useState(false);
 
   const displayName = user?.fullName || "Longhorn user";
@@ -127,7 +126,7 @@ const AppShell = ({ active, onNavigate, user, counts, onSignOut, onHelp, childre
         <nav className="space-y-1">
           <NavItem active={active === "settings"} icon={Settings2} label="Settings" onClick={() => go("settings")} />
           {user?.isAdmin && <NavItem active={active === "admin"} icon={Users} label="Admin panel" onClick={() => go("admin")} />}
-          <NavItem active={false} icon={CircleHelp} label="Help centre" onClick={() => onHelp?.()} />
+          <NavItem active={active === "help"} icon={CircleHelp} label="Help centre" onClick={() => go("help")} />
         </nav>
 
         <div className="mt-auto rounded-2xl bg-[#182238] p-4 text-white shadow-lg shadow-[#182238]/10">

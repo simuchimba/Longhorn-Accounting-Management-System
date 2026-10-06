@@ -147,6 +147,8 @@ const Admin = () => {
     }
   };
 
+  // "help" lands on the ledger with the help view selected, since the help
+  // centre belongs to the ledger rather than to the admin panel.
   const go = (key: NavKey) => navigate(key === "admin" ? "/admin" : `/?view=${key}`);
 
   const signOut = async () => {
@@ -161,7 +163,6 @@ const Admin = () => {
       onNavigate={go}
       user={profile}
       onSignOut={signOut}
-      onHelp={() => toast.info("Ask a workspace admin to update roles, branches or sign-in access.")}
     >
       <div className="page-heading">
         <div>
