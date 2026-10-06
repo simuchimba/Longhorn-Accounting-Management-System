@@ -162,6 +162,28 @@ What it deliberately does **not** block: several payments on the same date. Payi
 courier and airtime on one morning is normal, and enforcing one voucher per date would stop
 real payments. A duplicate is the same invoice paid twice, not two payments on one day.
 
+### 8. Make the approval date match the date on the voucher
+
+Run `database/align_approval_dates.sql` in the SQL Editor. Section 1 is read-only and shows
+the gap first.
+
+An approved voucher's `approved_at` is set to its own `voucher_date`, so the record and the
+printed sheet agree. `voucher_date` itself is never touched, so nothing moves between months:
+a payment dated 15 January stays in January in every list, report and monthly approval view.
+
+The original timestamp is not lost. It moves to `approved_recorded_at`, so you can still
+audit exactly when each approval happened in the system:
+
+```sql
+select voucher_no, voucher_date, approved_at, approved_recorded_at
+  from public.vouchers
+ where approved_recorded_at is not null
+ order by approved_recorded_at desc;
+```
+
+A trigger keeps this true for future approvals, so it holds for the composer, the monthly
+bulk approval and the bulk importer alike.
+
 ## Verifying the rules locally
 
 The migration can be tested without touching Supabase. This builds a throwaway database,

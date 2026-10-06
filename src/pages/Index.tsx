@@ -255,7 +255,7 @@ const VoucherPrint = ({ voucher }: { voucher: Voucher }) => (
     <div className="print-rule" /><h1>PAYMENT VOUCHER</h1>
     <div className="print-meta-grid"><strong>PV NO. <span>{voucher.voucherNo}</span></strong><strong>TPIN: <span>1009055576</span></strong><strong>Date: <span>{formatDate(voucher.date)}</span></strong></div>
     <div className="print-body"><div className="print-line"><b>Amount:</b><span className="amount-box">{formatMoney(voucher.amount, voucher.currency)}</span></div><div className="print-line"><b>Amount paid to:</b><span>{voucher.paidTo}</span></div><div className="print-line print-tall"><b>Amount in words:</b><span>{voucher.amountWords}</span></div><div className="print-line print-tall"><b>Being Payment:</b><span>{voucher.beingPayment}</span></div><div className="print-detail-row"><span><b>Department:</b> {voucher.department}</span><span><b>Payment:</b> {voucher.paymentMethod}</span><span><b>Reference:</b> {voucher.reference || "—"}</span></div></div>
-    <div className="print-signatures"><div><b>Prepared by:</b><span>{voucher.preparedBy || "________________________"}</span><em>Signature: __________________</em><small>Date: {formatDate(voucher.date)}</small></div><div><b>Approved by:</b><span>{voucher.approvedBy || "________________________"}</span><em>Signature: __________________</em><small>Date: __________________</small></div></div>
+    <div className="print-signatures"><div><b>Prepared by:</b><span>{voucher.preparedBy || "________________________"}</span><em>Signature: __________________</em><small>Date: {formatDate(voucher.date)}</small></div><div><b>Approved by:</b><span>{voucher.approvedBy || "________________________"}</span><em>Signature: __________________</em><small>Date: {voucher.approvedAt ? formatDate(voucher.approvedAt.slice(0, 10)) : "__________________"}</small></div></div>
     <div className="print-footer">Ground Floor, Plot 1146 / 15 Lagos Road, Rhodes Park, P.O Box 50655, Ridgeway, Lusaka · Tel / Fax: +260 211 252 540 · info@longhorn-associates.com</div>
   </article>
 );
@@ -668,7 +668,10 @@ const explainDeleteError = (error: { message?: string } | null): string => {
   const approveVoucher = async (id: string) => {
     if (!user) return;
     if (!canApprove) { setNotice("Voucher approval is reserved for approvers."); return; }
-    const { data, error } = await supabase.from("vouchers").update({ status: "Approved", approved_by: user.id, approved_by_name: displayName, approved_at: new Date().toISOString() }).eq("id", id).select(VOUCHER_COLUMNS).single();
+    // approved_at is the voucher's own date, so the printed sheet and the ledger
+    // agree. approved_recorded_at keeps the real moment, and the database trigger
+    // sets it, so it is deliberately not sent from here.
+    const { data, error } = await supabase.from("vouchers").update({ status: "Approved", approved_by: user.id, approved_by_name: displayName, approved_at: `${vouchers.find((voucher) => voucher.id === id)?.date ?? new Date().toISOString().slice(0, 10)}T00:00:00Z` }).eq("id", id).select(VOUCHER_COLUMNS).single();
     if (error) {
       setNotice(error.message);
       return;
@@ -798,12 +801,14 @@ const explainDeleteError = (error: { message?: string } | null): string => {
     setNotice("");
     try {
       const result = await bulkApproveVouchers(ids, approvalMonth);
-      const now = new Date().toISOString();
-      // Reflect the result locally so the list updates without a reload.
+      // Reflect the result locally so the list updates without a reload. Each
+      // voucher keeps its own date as the approval date, matching what the
+      // database now stores, so the printed sheet and the list agree.
+      const approvedIds = new Set(result.approved.map((row) => row.id));
       setVouchers((current) =>
         current.map((voucher) =>
-          result.approved.some((row) => row.id === voucher.id)
-            ? { ...voucher, status: "Approved", approvedBy: result.approvedBy, approvedById: user?.id ?? null, approvedAt: now }
+          approvedIds.has(voucher.id)
+            ? { ...voucher, status: "Approved", approvedBy: result.approvedBy, approvedById: user?.id ?? null, approvedAt: `${voucher.date}T00:00:00Z` }
             : voucher,
         ) as Voucher[],
       );
@@ -1179,7 +1184,6 @@ const explainDeleteError = (error: { message?: string } | null): string => {
     setImportError("");
     try {
       const pool = await reserveVoucherNumbers(valid.map((row) => row.date));
-      const now = new Date().toISOString();
       const approved = importStatus === "Approved";
       // Bulk rows all go to one approver, so the importer asks for one up front.
       const importApprover = approvers.find((member) => member.id === importApproverId)
@@ -1217,7 +1221,9 @@ const explainDeleteError = (error: { message?: string } | null): string => {
           // hundreds of Longhorn Associates vouchers.
           approved_by: approved ? importApprover?.id ?? null : null,
           approved_by_name: approved ? importApprover?.fullName ?? null : null,
-          approved_at: approved ? now : null,
+          // Each imported row keeps its own date, so an approved import shows the
+          // date printed on the voucher rather than the day the file was loaded.
+          approved_at: approved ? `${row.date}T00:00:00Z` : null,
           status: importStatus,
         };
       });

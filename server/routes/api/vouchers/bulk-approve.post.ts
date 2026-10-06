@@ -101,7 +101,10 @@ export default defineHandler(async (event) => {
         status: "Approved",
         approved_by: caller.id,
         approved_by_name: caller.fullName,
-        approved_at: new Date().toISOString(),
+        // Each voucher keeps its own date, so the printed sheet matches the
+        // ledger. The database trigger sets approved_recorded_at to the real
+        // moment, which is why it is not written here.
+        approved_at: null,
       })
       .in("id", chunk)
       .eq("status", "Pending approval")
