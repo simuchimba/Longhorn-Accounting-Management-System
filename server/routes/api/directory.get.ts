@@ -15,9 +15,13 @@ type DirectoryMember = {
  * Reference data the voucher composer needs.
  *
  * `companies` drives the branch filter and the company shown on a voucher.
- * `approvers` powers the "who should approve this?" dropdown, which lists every
- * approver and admin across all three branches so a preparer can route a payment
- * to whoever actually signs it off.
+ * `approvers` powers the "who should approve this?" dropdown.
+ *
+ * Only role 'approver' is listed. Admins can approve anything, but they run the
+ * workspace rather than sign off its payments day to day, so offering them here
+ * would push routine vouchers at whoever happens to be the system admin.
+ * Admins remain able to approve; they are simply not the default choice a
+ * preparer is offered.
  */
 export default defineHandler(async (event) => {
   const caller = await requireCaller(event);
@@ -28,7 +32,7 @@ export default defineHandler(async (event) => {
     client
       .from("profiles")
       .select("id, full_name, role, company_id")
-      .in("role", ["approver", "admin"])
+      .eq("role", "approver")
       .order("full_name"),
   ]);
 

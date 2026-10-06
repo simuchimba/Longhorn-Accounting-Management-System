@@ -94,7 +94,7 @@ export const getServiceClient = (): SupabaseClient => {
     throw createError({
       statusCode: 503,
       statusMessage:
-        "NITRO_SUPABASE_SERVICE_KEY is missing from .env. The admin panel needs it to create and manage user accounts.",
+        "NITRO_SUPABASE_SERVICE_KEY is not set on the server. Add it under Vercel > Settings > Environment Variables (Production scope), then redeploy. Locally it belongs in .env. The admin panel needs it to create and manage user accounts.",
     });
   }
   return createClient(url, serviceKey, {

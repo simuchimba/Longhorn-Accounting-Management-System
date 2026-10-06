@@ -113,6 +113,35 @@ for (let attempt = 1; attempt <= 3; attempt += 1) {
 
 const failures = [];
 
+/*
+ * Who a preparer may nominate to approve. Admins must never appear, and the rule
+ * has to hold for a hand-made request as well as for the dropdown, so this runs
+ * against the database trigger rather than the UI.
+ */
+const NOM_DB = `${TEST_DB}_nom`;
+console.log("\nVerifying approver nominations...");
+run(["-c", `drop database if exists ${NOM_DB}`], { quiet: true });
+run(["-c", `create database ${NOM_DB}`], { quiet: true });
+runFile(NOM_DB, "_migration_test_setup.sql");
+runFile(NOM_DB, "multi_company_setup.sql");
+
+const nom = spawnSync(
+  psql,
+  [...connectionFlags(), "-X", "-q", "-v", "ON_ERROR_STOP=1", "-d", NOM_DB, "-f", path.join(here, "_nomination_verify.sql")],
+  { encoding: "utf8", env: connectionEnv() },
+);
+const nomOutput = `${nom.stdout ?? ""}${nom.stderr ?? ""}`;
+if (nom.status !== 0) {
+  console.error(nomOutput);
+  process.exit(1);
+}
+for (const line of nomOutput.split("\n").filter((l) => /PASS:|FAIL:/.test(l))) {
+  const label = line.replace(/^psql[^\n]*?NOTICE:\s*/, "").replace(/^(PASS|FAIL):\s*/, "");
+  console.log(`  ${/PASS:/.test(line) ? "PASS" : "FAIL"}: ${label}`);
+  if (/FAIL:/.test(line)) failures.push(label);
+}
+run(["-c", `drop database if exists ${NOM_DB}`], { quiet: true });
+
 /**
  * Role and branch edits made outside the app: the Supabase Table Editor and the
  * SQL editor both write with no signed-in user, which a security trigger must not

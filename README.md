@@ -27,18 +27,35 @@ npm run dev
 
 ### 2. Add the server keys
 
-Supabase is the database and the sign-in provider. Put these in `.env`:
+Supabase is the database and the sign-in provider. Copy `.env.example` to `.env` and fill
+in three variables:
 
-```
-NITRO_SUPABASE_URL=https://<project>.supabase.co
-NITRO_SUPABASE_ANON_KEY=<publishable key>
-NITRO_SUPABASE_SERVICE_KEY=<secret key>
-```
+| Variable | Where to find it | Needed for |
+| --- | --- | --- |
+| `NITRO_SUPABASE_URL` | Supabase → Project Settings → API | resolving your role and branch |
+| `NITRO_SUPABASE_ANON_KEY` | same page, Publishable key | verifying who is signed in |
+| `NITRO_SUPABASE_SERVICE_KEY` | same page, Secret key | admin panel only |
 
 The publishable key is also hardcoded in `src/integrations/supabase/client.ts` for the
-browser. `NITRO_SUPABASE_SERVICE_KEY` is **server-only**: nothing under `src/` reads it,
-and the admin panel's create-user and switch-access actions need it. Find it under
-Supabase dashboard → Project Settings → API Keys.
+browser, so it is safe to expose. The **secret** key is not: nothing under `src/` reads it,
+and it must never be committed or shared.
+
+### 2a. On Vercel
+
+Environment variables are read at build time, so set them under
+**Settings → Environment Variables** with **Production** scope, then redeploy:
+
+```
+NITRO_SUPABASE_URL             production
+NITRO_SUPABASE_ANON_KEY        production
+NITRO_SUPABASE_SERVICE_KEY     production   (sb_secret_...)
+```
+
+Setting them in `.env` alone does nothing for the deployed site. If the admin panel reports
+a missing credential, it means the current deployment predates the variable.
+
+Without the secret key everything still works — sign-in, vouchers, branch visibility and
+monthly approval. Only "Add person", access toggles and password resets are blocked.
 
 ### 3. Run the database migration
 
@@ -201,9 +218,9 @@ on the server.
 
 ## Notes
 
-- **Migrating users.** `NITRO_SUPABASE_SERVICE_KEY` is missing by default, so the admin
-  panel's add-person and switch-access buttons report a clear configuration error instead
-  of failing silently. Viewing everything else works without it.
+- **Migrating users.** The service key is server-only and never committed, so the admin
+  panel reports a clear configuration error until it is set rather than failing silently.
+  Viewing everything else works without it.
 - **Bulk import** assigns every row in a file to one nominated approver, since a
   spreadsheet has no per-row approver.
 - **The approver dropdown** lists every approver and admin across all three branches,

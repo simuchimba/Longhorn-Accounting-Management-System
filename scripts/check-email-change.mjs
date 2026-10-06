@@ -98,5 +98,19 @@ check("trigger allows writes with no signed-in user", /if auth\.uid\(\) is null 
 check("the shipped fix file carries the same correction", /auth\.uid\(\) is null/.test(roleFix));
 check("primary key is held before any early return", /new\.id := old\.id;[\s\S]*?if auth\.uid\(\) is null/.test(migration));
 
+// --- the approver dropdown must offer approvers only ------------------------
+const directory = read("server/routes/api/directory.get.ts");
+const css = read("src/globals.css");
+check("directory lists approvers only, not admins", /\.eq\("role", "approver"\)/.test(directory) && !/\.in\("role", \["approver", "admin"\]\)/.test(directory));
+check("composer filters the dropdown to approvers", /approvers\.filter\(\(member\) => member\.role === "approver"\)/.test(index));
+check("composer refuses a non-approver nomination", /chosenApprover\.role !== "approver"/.test(index));
+check("composer explains when no approvers exist", /No approvers exist yet/.test(index));
+check("the database rejects nominating a non-approver", /can_be_nominated_approver\(new\.assigned_approver_id\)/.test(migration));
+check("nominatability helper only accepts role approver", /p\.role = 'approver'/.test(migration));
+
+// --- the approver field icon must not sit under the select's text ------------
+check("input-icon clears room for a select", /\.input-icon select \{ padding-left: 31px; \}/.test(css));
+check("input-icon still clears room for an input", /\.input-icon input \{ padding-left: 31px; \}/.test(css));
+
 console.log(failed ? `\n${failed} check(s) failed` : "\nAll email-change checks passed");
 process.exit(failed ? 1 : 0);

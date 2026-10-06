@@ -504,8 +504,12 @@ const Index = () => {
     }
     // The approver is nominated in the composer so the voucher lands with the
     // right signatory straight away, instead of waiting for someone to route it.
-    if (!chosenApprover) {
+    if (!chosenApprover || chosenApprover.role !== "approver") {
       setNotice("Choose who should approve this voucher before saving it.");
+      return;
+    }
+    if (!approvers.some((member) => member.role === "approver")) {
+      setNotice("No approvers exist yet. Ask a workspace admin to promote someone to approver.");
       return;
     }
     const taken = new Set(vouchers.map((v) => v.voucherNo));
@@ -513,6 +517,9 @@ const Index = () => {
     let error: { message: string; code?: string } | null = null;
     for (let attempt = 0; attempt < 3 && !data; attempt++) {
       const voucherNo = await nextVoucherNo(form.date, taken);
+      // Admins are never offered here: they run the workspace rather than sign off
+      // its payments. Filtered again below so a stale directory cannot slip one in.
+      const eligible = approvers.filter((member) => member.role === "approver");
       const result = await supabase.from("vouchers").insert({
         voucher_no: voucherNo,
       voucher_date: form.date,
@@ -527,8 +534,8 @@ const Index = () => {
       company_id: myCompanyId,
       prepared_by: user.id,
       prepared_by_name: form.preparedBy.trim(),
-      assigned_approver_id: chosenApprover.id,
-      assigned_approver_name: chosenApprover.fullName,
+      assigned_approver_id: eligible.some((member) => member.id === chosenApprover.id) ? chosenApprover.id : null,
+      assigned_approver_name: eligible.some((member) => member.id === chosenApprover.id) ? chosenApprover.fullName : null,
       status: "Pending approval",
       }).select(VOUCHER_COLUMNS).single();
       if (!result.error) {

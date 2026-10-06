@@ -74,6 +74,13 @@ grant select, insert, update, delete on all tables in schema public to authentic
 grant usage on schema auth to authenticated;
 grant execute on function auth.uid() to authenticated;
 grant execute on function public.impersonate(uuid) to authenticated;
+
+create or replace function public.clear_claim() returns void
+language plpgsql as $$
+begin
+  perform set_config('request.jwt.claim.sub', '', false);
+end $$;
+grant execute on function public.clear_claim() to authenticated;
 grant execute on function public.as_preparer() to authenticated;
 grant execute on function public.as_approver() to authenticated;
 grant execute on function public.as_admin() to authenticated;

@@ -20,6 +20,10 @@
 --    Supabase dashboard > SQL Editor > New query > paste this whole file > Run.
 --    Safe to run more than once: every statement is guarded.
 --
+--    ALREADY RAN IT? Re-run this whole file to pick up later changes. Every
+--    statement is guarded, so the re-run is safe and is the upgrade path for
+--    anything added after your first run, such as the approver-nomination rule.
+--
 --  AFTER RUNNING, check the verification block at the very bottom. Every
 --  query there should return rows / true.
 -- ============================================================================
@@ -209,18 +213,39 @@ as $$
          and target_company = public.current_profile_company_id();
 $$;
 
+-- Who a preparer may nominate to sign off a payment. Admins are deliberately
+-- excluded: they run the workspace rather than approve its payments, so nominating
+-- one by default would push routine vouchers at whoever the system admin happens
+-- to be. They can still approve anything; this only governs the dropdown.
+create or replace function public.can_be_nominated_approver(target uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+      from public.profiles p
+     where p.id = target
+       and p.role = 'approver'
+  );
+$$;
+
 revoke all on function public.current_profile_role()          from public;
 revoke all on function public.current_profile_company_id()   from public;
 revoke all on function public.current_user_is_approver()     from public;
 revoke all on function public.current_user_is_admin()         from public;
 revoke all on function public.current_user_can_prepare()     from public;
 revoke all on function public.user_can_see_company(uuid)     from public;
+revoke all on function public.can_be_nominated_approver(uuid) from public;
 grant execute on function public.current_profile_role()          to authenticated;
 grant execute on function public.current_profile_company_id()   to authenticated;
 grant execute on function public.current_user_is_approver()     to authenticated;
 grant execute on function public.current_user_is_admin()         to authenticated;
 grant execute on function public.current_user_can_prepare()     to authenticated;
 grant execute on function public.user_can_see_company(uuid)     to authenticated;
+grant execute on function public.can_be_nominated_approver(uuid) to authenticated;
 
 
 -- ---------------------------------------------------------------------------
@@ -247,6 +272,14 @@ begin
     new.company_id := actor_company;
   elsif actor_role <> 'admin' and new.company_id is distinct from actor_company then
     raise exception 'You can only create vouchers for your own company.'
+      using errcode = '42501';
+  end if;
+
+  -- The nominated approver must actually be an approver. Checked here as well as in
+  -- the dropdown, so a hand-made request cannot nominate an admin or a preparer.
+  if new.assigned_approver_id is not null
+     and not public.can_be_nominated_approver(new.assigned_approver_id) then
+    raise exception 'That person is not an approver, so cannot sign off a voucher.'
       using errcode = '42501';
   end if;
 
