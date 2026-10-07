@@ -33,8 +33,7 @@
 -- ---------------------------------------------------------------------------
 --  1. Find the conflicts first. Read-only.
 -- ---------------------------------------------------------------------------
-\echo ''
-\echo '=== duplicates that would block the change ==='
+-- === duplicates that would block the change ===
 select
   coalesce(c.name, 'Unassigned') as branch,
   lower(trim(v.paid_to)) as payee,
@@ -152,8 +151,7 @@ $$;
 --  3. Verify.
 -- ---------------------------------------------------------------------------
 
-\echo ''
-\echo '--- the index exists? ---'
+-- --- the index exists? ---
 -- pg_indexes has no indexrelid; join through pg_class and pg_index instead.
 select c.relname as index_name, pg_get_indexdef(i.indexrelid) as definition
   from pg_index i
@@ -161,8 +159,7 @@ select c.relname as index_name, pg_get_indexdef(i.indexrelid) as definition
  where i.indrelid = 'public.vouchers'::regclass
    and c.relname = 'uniq_vouchers_reference_per_branch';
 
-\echo ''
-\echo '--- the trigger exists? ---'
+-- --- the trigger exists? ---
 select tgname, tgenabled
   from pg_trigger
  where tgrelid = 'public.vouchers'::regclass

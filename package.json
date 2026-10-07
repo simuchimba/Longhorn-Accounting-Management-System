@@ -18,7 +18,8 @@
     "test:attribution": "node scripts/check-attribution.mjs",
     "test:duplicates": "node scripts/check-duplicates.mjs",
     "test:dates": "node scripts/check-dates.mjs",
-    "test:approvaldate": "node scripts/check-approval-date.mjs"
+    "test:approvaldate": "node scripts/check-approval-date.mjs",
+    "test:sql": "node scripts/check-sql-editor.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.0",

@@ -13,8 +13,7 @@
 -- ---------------------------------------------------------------------------
 --  1. Same branch, date, payee and amount. The clearest double-entry.
 -- ---------------------------------------------------------------------------
-\echo ''
-\echo '=== Same date + payee + amount (likely double entries) ==='
+-- === Same date + payee + amount (likely double entries) ===
 select
   coalesce(c.name, 'Unassigned') as branch,
   v.voucher_date,
@@ -32,8 +31,7 @@ having count(*) > 1
 -- ---------------------------------------------------------------------------
 --  2. Same reference used more than once. Invoices should be unique.
 -- ---------------------------------------------------------------------------
-\echo ''
-\echo '=== Same reference used twice (one invoice paid twice) ==='
+-- === Same reference used twice (one invoice paid twice) ===
 select
   coalesce(c.name, 'Unassigned') as branch,
   trim(v.reference) as reference,
@@ -53,8 +51,7 @@ having count(*) > 1
 -- ---------------------------------------------------------------------------
 --  3. Same payee and amount on the same day, whatever the date column says.
 -- ---------------------------------------------------------------------------
-\echo ''
-\echo '=== Same payee + amount on one day, across all dates ==='
+-- === Same payee + amount on one day, across all dates ===
 select
   coalesce(c.name, 'Unassigned') as branch,
   lower(trim(v.paid_to)) as payee,
@@ -71,8 +68,7 @@ having count(*) > 1
 -- ---------------------------------------------------------------------------
 --  4. Just how many vouchers share a date. Context for the question.
 -- ---------------------------------------------------------------------------
-\echo ''
-\echo '=== How many vouchers per date (top 20) ==='
+-- === How many vouchers per date (top 20) ===
 select
   v.voucher_date,
   count(*) as vouchers,
@@ -82,8 +78,7 @@ select
  order by vouchers desc, v.voucher_date desc
  limit 20;
 
-\echo ''
-\echo '=== Distinct dates vs total vouchers ==='
+-- === Distinct dates vs total vouchers ===
 select
   count(*)                                        as total_vouchers,
   count(distinct voucher_date)                    as distinct_dates,

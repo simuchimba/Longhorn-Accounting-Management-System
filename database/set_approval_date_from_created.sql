@@ -57,8 +57,7 @@
 -- ---------------------------------------------------------------------------
 --  1. The problem, by month. Read-only.
 -- ---------------------------------------------------------------------------
-\echo ''
-\echo '=== approval month vs creation month (September rows should show October) ==='
+-- === approval month vs creation month (September rows should show October) ===
 select
   to_char(v.created_at, 'YYYY-MM') as created_month,
   to_char(v.approved_at, 'YYYY-MM') as approved_month,
@@ -78,8 +77,7 @@ select
 --  back-dated entry. For those, section 3 sets the approval date to the CREATION
 --  date, which is later than the date on the voucher. That is what "approved on
 --  the day it was entered" means, but confirm it is what you want.
-\echo ''
-\echo '=== back-dated vouchers: created on a different day from the voucher date ==='
+-- === back-dated vouchers: created on a different day from the voucher date ===
 select
   v.voucher_no,
   v.voucher_date                                  as date_on_voucher,
@@ -92,8 +90,7 @@ select
  order by v.voucher_date desc
  limit 50;
 
-\echo ''
-\echo '=== how many in total, and how many change month as a result ==='
+-- === how many in total, and how many change month as a result ===
 select
   count(*) filter (where v.created_at::date <> v.voucher_date) as back_dated,
   count(*) filter (where v.created_at::date <> v.voucher_date
@@ -185,8 +182,7 @@ create trigger trg_vouchers_approval_date
 --  5. Verify. Every count below should now be zero.
 -- ---------------------------------------------------------------------------
 
-\echo ''
-\echo '=== approval date now equals the creation date, for every voucher? ==='
+-- === approval date now equals the creation date, for every voucher? ===
 select
   count(*) filter (where v.status = 'Approved' and v.approved_at is distinct from v.created_at) as still_wrong,
   count(*) filter (where v.status = 'Approved' and v.approved_at is null)                       as approved_but_blank,
@@ -195,8 +191,7 @@ select
   count(*)                                                                                     as total_vouchers
   from public.vouchers v;
 
-\echo ''
-\echo '=== the September rows specifically ==='
+-- === the September rows specifically ===
 select
   v.voucher_no,
   v.voucher_date                                  as date_on_voucher,
@@ -208,8 +203,7 @@ select
  order by v.voucher_date
  limit 20;
 
-\echo ''
-\echo '=== approval month now matches creation month for all of them? ==='
+-- === approval month now matches creation month for all of them? ===
 select
   count(*) as approved_vouchers,
   count(*) filter (where to_char(v.approved_at, 'YYYY-MM') = to_char(v.created_at, 'YYYY-MM')) as month_matches,
@@ -217,8 +211,7 @@ select
   from public.vouchers v
  where v.status = 'Approved';
 
-\echo ''
-\echo '=== confirm no voucher changed its own month (must be untouched) ==='
+-- === confirm no voucher changed its own month (must be untouched) ===
 select voucher_no, voucher_date, status
   from public.vouchers
  order by voucher_date desc

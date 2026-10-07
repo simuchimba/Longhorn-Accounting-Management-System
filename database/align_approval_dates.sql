@@ -68,8 +68,7 @@
 -- ============================================================================
 --  Read-only. Shows the gap between the approval date and the voucher's own date.
 -- ============================================================================
-\echo ''
-\echo '=== before: approved vouchers whose approval date is not the date on the voucher ==='
+-- === before: approved vouchers whose approval date is not the date on the voucher ===
 select
   coalesce(c.name, 'Unassigned') as branch,
   count(*) filter (where v.approved_at is not null
@@ -81,8 +80,7 @@ select
  group by 1
  order by 1;
 
-\echo ''
-\echo '=== the September vouchers, before ==='
+-- === the September vouchers, before ===
 select
   v.voucher_no,
   v.voucher_date                                  as date_on_voucher,
@@ -105,8 +103,7 @@ select
 --
 --  The check below shows how far apart the two are. If every row agrees, either
 --  source would do, but they will not agree on batch-imported data.
-\echo ''
-\echo '=== created_at vs the date on the voucher ==='
+-- === created_at vs the date on the voucher ===
 select
   count(*)                                                                  as total,
   count(*) filter (where created_at::date = voucher_date)                  as same_day,
@@ -114,8 +111,7 @@ select
   count(*) filter (where to_char(created_at,'YYYY-MM') <> to_char(voucher_date,'YYYY-MM')) as different_month
   from public.vouchers;
 
-\echo ''
-\echo '=== sample rows where they differ, so you can eyeball the choice ==='
+-- === sample rows where they differ, so you can eyeball the choice ===
 select
   voucher_no,
   voucher_date                                as date_on_voucher,
@@ -144,8 +140,7 @@ select
 drop trigger if exists trg_vouchers_approval_date on public.vouchers;
 drop trigger if exists trg_vouchers_align_approval_date on public.vouchers;
 
-\echo ''
-\echo '--- triggers that could rewrite the approval date (expect none) ---'
+-- --- triggers that could rewrite the approval date (expect none) ---
 select tgname
   from pg_trigger
  where tgrelid = 'public.vouchers'::regclass
@@ -226,8 +221,7 @@ create trigger trg_vouchers_align_approval_date
 -- ---------------------------------------------------------------------------
 --  5. Verify. Every count below should now be zero.
 -- ---------------------------------------------------------------------------
-\echo ''
-\echo '=== after: approval date matches the date on every voucher ==='
+-- === after: approval date matches the date on every voucher ===
 select
   count(*) filter (where v.status = 'Approved'
                      and v.approved_at is distinct from v.voucher_date::timestamptz) as still_wrong,
@@ -237,8 +231,7 @@ select
   count(*)                                                                            as total_vouchers
   from public.vouchers v;
 
-\echo ''
-\echo '=== the September vouchers, after ==='
+-- === the September vouchers, after ===
 select
   v.voucher_no,
   v.voucher_date                                  as date_on_voucher,
@@ -250,8 +243,7 @@ select
  order by v.voucher_date
  limit 20;
 
-\echo ''
-\echo '=== the whole ledger agrees? ==='
+-- === the whole ledger agrees? ===
 select
   count(*) as approved_vouchers,
   count(*) filter (where v.approved_at::date = v.voucher_date) as date_matches,

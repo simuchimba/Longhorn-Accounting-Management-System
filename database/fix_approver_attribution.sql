@@ -37,8 +37,7 @@
 --  1. What the ledger says now. Read-only.
 -- ---------------------------------------------------------------------------
 
-\echo ''
-\echo '--- approver attribution by branch and status ---'
+-- --- approver attribution by branch and status ---
 select
   coalesce(c.name, 'Unassigned') as branch,
   v.status,
@@ -53,8 +52,7 @@ select
  group by 1, 2, 3, 4
  order by 1, 2, 3;
 
-\echo ''
-\echo '--- who is approver or admin right now ---'
+-- --- who is approver or admin right now ---
 select
   au.email,
   coalesce(p.full_name, '(no profile)') as full_name,
@@ -144,8 +142,7 @@ $$;
 --  3. Verify. Run this afterwards.
 -- ---------------------------------------------------------------------------
 
-\echo ''
-\echo '--- Longhorn Associates approver attribution after the fix ---'
+-- --- Longhorn Associates approver attribution after the fix ---
 select
   v.status,
   coalesce(v.approved_by_name, '(none)') as approver,
@@ -158,8 +155,7 @@ select
  group by 1, 2
  order by 1, 2;
 
-\echo ''
-\echo '--- any approver anywhere that is not an approver role? (expect none) ---'
+-- --- any approver anywhere that is not an approver role? (expect none) ---
 select
   coalesce(c.name, 'Unassigned') as branch,
   v.approved_by_name,

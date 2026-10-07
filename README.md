@@ -186,8 +186,12 @@ bulk approval and the bulk importer alike.
 
 ### 9. Make the approval date match the date on the voucher
 
-Run `database/align_approval_dates.sql` in the SQL Editor. Its opening sections are read-only
-and show the gap, plus how far `created_at` and the voucher's own date diverge.
+Run `database/align_approval_dates.sql` in the SQL Editor. Paste the whole file and click Run.
+Its opening sections are read-only and show the gap, plus how far `created_at` and the
+voucher's own date diverge.
+
+If you see `syntax error at or near "\"`, you are running an older copy that still contains
+psql client commands such as `\echo`. Those are not SQL. Pull the latest and paste again.
 
 `approved_at` becomes `voucher_date`, the date printed on the voucher. A voucher dated 30
 September shows **Date: 30 Sep 2026** beside the approver's signature, matching the date at
