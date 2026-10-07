@@ -28,6 +28,29 @@
 --  HOW TO RUN
 --    Supabase dashboard > SQL Editor > paste the WHOLE file > Run.
 --    Safe to run more than once.
+--
+-- ============================================================================
+--  SUPERSEDED. Do not run this file.
+-- ============================================================================
+--  Use database/align_approval_dates.sql instead.
+--
+--  WHY THIS FILE IS WRONG
+--    It sets the approval date to created_at, which is when the row was written
+--    to the database. Every voucher in this ledger was loaded in one batch on
+--    5 October, so created_at reads 05 Oct 2026 for all of them, including the
+--    ones dated September. Running this file therefore left every September
+--    voucher still showing an October approval date, which was the exact problem
+--    it was written to fix.
+--
+--  IF YOU ALREADY RAN THIS ONE
+--    Nothing to undo. Run align_approval_dates.sql afterwards: it switches you
+--    over to the date printed on the voucher, and is idempotent.
+--
+--  Everything below is the original script, kept for reference only.
+-- ============================================================================
+
+-- ============================================================================
+--  ORIGINAL: set the approval date to the voucher's creation date
 -- ============================================================================
 
 

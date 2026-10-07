@@ -184,23 +184,35 @@ select voucher_no, voucher_date, approved_at, approved_recorded_at
 A trigger keeps this true for future approvals, so it holds for the composer, the monthly
 bulk approval and the bulk importer alike.
 
-### 9. Set the approval date to the voucher's creation date
+### 9. Make the approval date match the date on the voucher
 
-Run `database/set_approval_date_from_created.sql` in the SQL Editor. Section 1 shows the
-problem by month and section 2 lists back-dated vouchers, both read-only, so you can check
-before changing anything.
+Run `database/align_approval_dates.sql` in the SQL Editor. Its opening sections are read-only
+and show the gap, plus how far `created_at` and the voucher's own date diverge.
 
-`approved_at` becomes the voucher's **creation date**. Your September vouchers stop showing
-an October approval date, which was the day the batch was loaded rather than a date anything
-was signed.
+`approved_at` becomes `voucher_date`, the date printed on the voucher. A voucher dated 30
+September shows **Date: 30 Sep 2026** beside the approver's signature, matching the date at
+the top of the same sheet, and its month grouping follows the month it is dated.
 
-`voucher_date` is never touched, so no voucher changes month in any list or report. The
-original timestamp is preserved in `approved_recorded_at`.
+`voucher_date` itself is never touched, so nothing moves between months. The original
+timestamp moves to `approved_recorded_at`, so you can still audit exactly when each approval
+happened:
 
-> **Note:** `align_approval_dates.sql` does the same thing but uses `voucher_date` instead of
-> `created_at`. They agree for every voucher entered on the day it is dated, and differ only
-> for back-dated entries. **Run one, not both** — whichever you run last wins. If you already
-> ran `align_approval_dates.sql`, run this one afterwards to switch to the creation date.
+```sql
+select voucher_no, voucher_date, approved_at, approved_recorded_at
+  from public.vouchers
+ where approved_recorded_at is not null
+ order by approved_recorded_at desc;
+```
+
+A trigger keeps this true for future approvals, so it holds for single approval, monthly bulk
+approval and the bulk importer alike.
+
+**Run that one file and nothing else.** It supersedes
+`database/set_approval_date_from_created.sql`, which used `created_at` instead. That one is
+wrong for this ledger: every voucher was loaded in a single batch, so `created_at` reads the
+batch date and September vouchers kept showing an October approval date. It is marked
+SUPERSEDED. If you already ran it, just run `align_approval_dates.sql` afterwards — it
+switches you over and is idempotent.
 
 ## Verifying the rules locally
 
