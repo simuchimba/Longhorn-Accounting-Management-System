@@ -8,7 +8,7 @@
     "build": "vite build",
     "build:dev": "vite build --mode development",
     "db:seed": "node database/seed.mjs",
-    "db:verify": "node database/verify-migration.mjs && node database/verify-attribution.mjs && node database/verify-duplicates.mjs && node database/verify-dates.mjs && node database/verify-trigger-order.mjs",
+    "db:verify": "node database/verify-migration.mjs && node database/verify-attribution.mjs && node database/verify-duplicates.mjs && node database/verify-dates.mjs && node database/verify-trigger-order.mjs && node database/verify-department.mjs",
     "test:approvals": "node scripts/check-bulk-approval.mjs",
     "lint": "eslint .",
     "preview": "vite preview",
@@ -20,7 +20,8 @@
     "test:dates": "node scripts/check-dates.mjs",
     "test:approvaldate": "node scripts/check-approval-date.mjs",
     "test:sql": "node scripts/check-sql-editor.mjs",
-    "test:pagination": "node scripts/check-pagination.mjs"
+    "test:pagination": "node scripts/check-pagination.mjs",
+    "test:department": "node scripts/check-department.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.0",

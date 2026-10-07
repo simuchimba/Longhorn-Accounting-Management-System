@@ -226,6 +226,40 @@ rather than freezing the tab.
 > height, so every page printed blank. If the `.print-only` markup is ever moved back inside
 > the app shell, printing breaks again.
 
+### 10. Make a voucher's department be the branch that raised it
+
+Run `database/fix_voucher_department.sql` in the SQL Editor. Section 1 is read-only and shows
+the gap first.
+
+Every voucher used to read **General** under Department, all 780 of them, including the
+Longhorn Associates ones. Two columns were both claiming to hold the branch:
+
+- **`vouchers.company_id`** — the branch. This is what the app already trusted: branch filters,
+  row-level security and the approver list all read it. It was correct on every row throughout.
+- **`vouchers.department_id`** — pointed at a row called `General`, because the bulk import
+  defaulted every unrecognised value to it and the composer forced the first department.
+
+So the data needed to answer "which branch" was already there and already right.
+
+The app now reads `company_id` for the department, and the script repoints `department_id` to
+match, so the two cannot disagree again. It adds a department row per branch, and a trigger
+keeps future vouchers stamped with their own branch — including branches added later.
+
+```sql
+select v.voucher_no, v.voucher_date, c.name as department, v.status
+  from public.vouchers v
+  join public.companies c on c.id = v.company_id
+ order by v.voucher_date desc
+ limit 10;
+```
+
+Nothing else moves: voucher numbers, amounts, dates, approvals and branch are untouched. A
+voucher with no branch is left alone rather than guessed at.
+
+The department filter is gone from the approval panel. Now that department and branch mean the
+same thing, a second control beside the branch picker could only ever agree with it or
+contradict it.
+
 **Rows per page.** The pager under each table has a **Rows** picker: 10, 25, 50, 100, 150 or
 200. It appears as soon as there is anything in the list, so you can find it before you need
 it, and the choice is remembered on that browser for next time. One setting covers both
@@ -282,13 +316,38 @@ arithmetic is really run: an out-of-range page, a page that vanishes when the si
 a stored value edited to something unoffered, and the print limit are all exercised. It also
 asserts the wiring, including that no print path bypasses the limit.
 
+The voucher's department has its own, in both halves:
+
+```bash
+npm run test:department
+```
+
+`db:verify` builds 780 vouchers all reading `General`, exactly as your ledger did, then proves
+the fix resolves it. It fails if that fixture ever stops reproducing the bug, so the check
+cannot pass by quietly testing nothing. It also covers a second branch, a branch with no
+department row yet, and a voucher with no branch at all.
+
+```
+  reproduced: 780 voucher(s) read General
+  PASS: no voucher reads General
+  PASS: all 781 Longhorn Associates vouchers read Longhorn Associates
+  PASS: every active branch has one
+  PASS: stamped Longhorn Financial Services to match its branch
+  PASS: the department row was created on demand
+  PASS: left as it was, because there is no branch to infer
+  PASS: idempotent
+```
+
 ## Layout
 
 ```
 database/
   multi_company_setup.sql       the migration to run in Supabase
   fix_role_edits.sql            one-off fix if Table Editor role changes revert
+  align_approval_dates.sql      approval date = the date on the voucher
+  fix_voucher_department.sql    a voucher's department is its branch
   verify-migration.mjs          local proof the rules hold  (npm run db:verify)
+  verify-department.mjs         the department checks
   _migration_test_setup.sql     stand-in schema for the test
   _migration_verify.sql         the branch-scoping checks
   _role_edit_verify.sql         dashboard-edit checks

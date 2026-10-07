@@ -25,9 +25,9 @@ type ApprovalsPanelProps = {
   monthsWithVouchers: string[];
   search: string;
   onSearchChange: (value: string) => void;
-  department: string;
-  onDepartmentChange: (value: string) => void;
-  departments: string[];
+  // No department filter. A voucher's department is its branch, and the branch
+  // filter above already narrows to one, so a second control could only ever
+  // agree with it or contradict it.
   selected: string[];
   onToggle: (id: string) => void;
   onToggleAll: () => void;
@@ -80,9 +80,6 @@ const ApprovalsPanel = ({
   monthsWithVouchers,
   search,
   onSearchChange,
-  department,
-  onDepartmentChange,
-  departments,
   selected,
   onToggle,
   onToggleAll,
@@ -215,14 +212,6 @@ const ApprovalsPanel = ({
                 ))}
               </select>
             )}
-            <select value={department} onChange={(event) => onDepartmentChange(event.target.value)}>
-              <option value="All departments">All departments</option>
-              {departments.map((name) => (
-                <option key={name} value={name}>
-                  {name}
-                </option>
-              ))}
-            </select>
             <span className="filter-button">
               <Filter size={15} /> <span className="hidden sm:inline">Filtered</span>
             </span>

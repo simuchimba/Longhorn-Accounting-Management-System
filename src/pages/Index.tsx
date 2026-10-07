@@ -4,6 +4,7 @@ import {
   ArrowUpRight,
   BadgeCheck,
   Banknote,
+  Building2,
   Bell,
   CalendarDays,
   Check,
@@ -87,7 +88,6 @@ type VoucherForm = {
   beingPayment: string;
   paymentMethod: string;
   reference: string;
-  department: string;
   preparedBy: string;
   approverId: string;
 };
@@ -129,7 +129,6 @@ const emptyForm: VoucherForm = {
   beingPayment: "",
   paymentMethod: "Bank transfer",
   reference: "",
-  department: "",
   preparedBy: "",
   approverId: "",
 };
@@ -195,6 +194,17 @@ const statusStyles: Record<VoucherStatus, string> = {
 
 const mapVoucher = (row: DbVoucher, departmentMap: Map<string, string>, companyMap: Map<string, Company>): Voucher => {
   const company = row.company_id ? companyMap.get(row.company_id) : undefined;
+  // A voucher's department is the branch that raised it, which is what
+  // company_id records. It used to be read from department_id instead, and that
+  // column says "General" for every voucher, because the bulk import defaulted
+  // every unrecognised value to it. So all 780 read "General" while the branch
+  // sat right there in company_id, correct, the whole time.
+  //
+  // company_id is the right source because it is the one the rest of the system
+  // already trusts: branch filters, row-level security and the approver list all
+  // read it. Two columns both claiming to hold the branch is how they ended up
+  // disagreeing in the first place.
+  const departmentFromTable = departmentMap.get(row.department_id) || "";
   return {
     id: row.id,
     voucherNo: row.voucher_no,
@@ -206,7 +216,7 @@ const mapVoucher = (row: DbVoucher, departmentMap: Map<string, string>, companyM
     amountWords: row.amount_in_words,
     paymentMethod: row.payment_method,
     reference: row.reference || "",
-    department: departmentMap.get(row.department_id) || "Unassigned",
+    department: company?.name || departmentFromTable || "Unassigned",
     departmentId: row.department_id,
     companyId: row.company_id ?? null,
     companyName: company?.name || "",
@@ -240,6 +250,22 @@ const shiftMonth = (month: string, by: number) => {
 
 /** True when a month is in the past or the current one, never a future month. */
 const isSettledMonth = (month: string, today = new Date()) => month <= monthValue(today);
+
+/** The department name that is only ever a placeholder, never a real branch. */
+const PLACEHOLDER_DEPARTMENT = "General";
+
+/**
+ * The department row to stamp on a voucher someone is creating or importing.
+ *
+ * A voucher's department is its branch, so this prefers a department row named
+ * after that branch. "General" is deliberately never chosen: it is what made
+ * every voucher look like it belonged to nowhere, and database/fix_voucher_department.sql
+ * rewrites the existing rows off it.
+ */
+const departmentForBranch = (departments: Department[], branchName: string | undefined): Department | undefined => {
+  const named = branchName ? departments.find((department) => department.name === branchName) : undefined;
+  return named ?? departments.find((department) => department.name !== PLACEHOLDER_DEPARTMENT) ?? departments[0];
+};
 
 const StatusBadge = ({ status }: { status: VoucherStatus }) => <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${statusStyles[status]}`}><span className="h-1.5 w-1.5 rounded-full bg-current" />{status}</span>;
 
@@ -275,13 +301,14 @@ const Index = () => {
   const [approvalMonth, setApprovalMonth] = useState(monthValue(new Date()));
   const [approvalSelected, setApprovalSelected] = useState<string[]>([]);
   const [approvalSearch, setApprovalSearch] = useState("");
-  const [approvalDept, setApprovalDept] = useState("All departments");
+  // There is no department filter: a voucher's department is its branch, and the
+// branch picker above already does that job. Filtering by department as well
+// would have been a second control that could only ever agree or contradict it.
   const [bulkTarget, setBulkTarget] = useState<{ ids: string[]; label: string } | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [form, setForm] = useState<VoucherForm>(emptyForm);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"All statuses" | VoucherStatus>("All statuses");
-  const [departmentFilter, setDepartmentFilter] = useState("All departments");
   const [selected, setSelected] = useState<string[]>([]);
   const [page, setPage] = useState(1);
   // Rows per page, remembered between visits. One setting covers both archive
@@ -290,8 +317,7 @@ const Index = () => {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [approvedSearch, setApprovedSearch] = useState("");
-  const [approvedDept, setApprovedDept] = useState("All departments");
-  const [approvedSelected, setApprovedSelected] = useState<string[]>([]);
+    const [approvedSelected, setApprovedSelected] = useState<string[]>([]);
   const [approvedPage, setApprovedPage] = useState(1);
   const [approvedFrom, setApprovedFrom] = useState("");
   const [approvedTo, setApprovedTo] = useState("");
@@ -333,6 +359,9 @@ const Index = () => {
   const canPrepare = profile?.canPrepare ?? userRole !== "approver";
   const canApprove = profile?.isApprover ?? (userRole === "approver" || userRole === "admin");
   const myCompanyId = profile?.companyId ?? null;
+  // The signed-in person's own branch name. A voucher's department is this, so
+  // it is resolved once here rather than re-derived at each write path.
+  const myBranchLabel = companies.find((company) => company.id === myCompanyId)?.name ?? "";
   const initials = getInitials(displayName);
   const todayLabel = new Intl.DateTimeFormat("en-GB", { weekday: "long", day: "2-digit", month: "long", year: "numeric" }).format(new Date());
   const dayHour = new Date().getHours();
@@ -370,12 +399,23 @@ const Index = () => {
       if (firstError) {
         setNotice(firstError.message);
       } else {
-        let loadedDepartments = (departmentsResponse.data || []) as Department[];
-        if (!loadedDepartments.length) {
-          const { data: generalDepartment } = await supabase.from("departments").insert({ name: "General", description: "Default department" }).select("id, name, description").single();
-          if (generalDepartment) loadedDepartments = [generalDepartment as Department];
-        }
         const loadedCompanies = directoryResult?.companies ?? [];
+        let loadedDepartments = (departmentsResponse.data || []) as Department[];
+
+        // Make sure every branch has a department row of its own, so a voucher
+        // can be stamped with the branch it belongs to. This used to create a
+        // single row called "General" instead, which every voucher then carried.
+        const missingBranchDepartments = loadedCompanies
+          .filter((company) => company.isActive && !loadedDepartments.some((department) => department.name === company.name))
+          .map((company) => ({ name: company.name, description: company.description ?? `${company.name} branch` }));
+        if (missingBranchDepartments.length) {
+          const { data: created } = await supabase
+            .from("departments")
+            .upsert(missingBranchDepartments, { onConflict: "name" })
+            .select("id, name, description");
+          if (created?.length) loadedDepartments = [...loadedDepartments, ...(created as Department[])];
+        }
+
         setCompanies(loadedCompanies);
         setApprovers(directoryResult?.approvers ?? []);
         setDepartments(loadedDepartments);
@@ -386,10 +426,12 @@ const Index = () => {
         setForm((current) => ({
           ...current,
           preparedBy: current.preparedBy || displayName,
-          department: current.department || loadedDepartments[0]?.name || "",
         }));
 
-        if (!loadedDepartments.length) setNotice("No departments exist yet. Ask your workspace admin to add one before creating vouchers.");
+        // No branch department and no other department is not a reason to block anyone.
+        // A voucher with no department row still shows its branch, because
+        // mapVoucher reads company_id first.
+        if (!loadedDepartments.length) setNotice("No branch has a department record yet, so vouchers will be stamped with the branch name only.");
       }
       setLoading(false);
     };
@@ -450,8 +492,8 @@ const Index = () => {
   const approvalRate = vouchers.length ? Math.round((approvedCount / vouchers.length) * 100) : 0;
   const filteredVouchers = useMemo(() => vouchers.filter((voucher) => voucher.status !== "Approved").filter((voucher) => {
     const searchable = `${voucher.voucherNo} ${voucher.paidTo} ${voucher.beingPayment} ${voucher.reference}`.toLowerCase();
-    return matchesBranch(voucher) && searchable.includes(search.toLowerCase()) && (statusFilter === "All statuses" || voucher.status === statusFilter) && (departmentFilter === "All departments" || voucher.department === departmentFilter) && (!dateFrom || voucher.date >= dateFrom) && (!dateTo || voucher.date <= dateTo);
-  }), [dateFrom, dateTo, departmentFilter, matchesBranch, search, statusFilter, vouchers]);
+    return matchesBranch(voucher) && searchable.includes(search.toLowerCase()) && (statusFilter === "All statuses" || voucher.status === statusFilter) && (!dateFrom || voucher.date >= dateFrom) && (!dateTo || voucher.date <= dateTo);
+  }), [dateFrom, dateTo, matchesBranch, search, statusFilter, vouchers]);
 
   const pendingPages = Math.max(1, Math.ceil(filteredVouchers.length / pageSize));
   const safePage = Math.min(page, pendingPages);
@@ -508,10 +550,13 @@ const Index = () => {
   const createVoucher = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!canPrepare) { setNotice("Voucher creation is reserved for preparers."); return; }
-    const selectedDepartment = departments.find((department) => department.name === form.department);
+    // The department follows the branch, so it is not something to choose and not
+    // something to refuse a voucher over. The composer's old code demanded a
+    // department nobody could pick, because there was no field for it.
+    const selectedDepartment = departmentForBranch(departments, myBranchLabel);
     const chosenApprover = approvers.find((member) => member.id === form.approverId);
-    if (!user || !selectedDepartment || !form.amount || !form.paidTo.trim() || !form.beingPayment.trim() || !form.preparedBy.trim()) {
-      setNotice("Add the amount, department, payee, payment purpose and prepared by name to continue.");
+    if (!user || !form.amount || !form.paidTo.trim() || !form.beingPayment.trim() || !form.preparedBy.trim()) {
+      setNotice("Add the amount, payee, payment purpose and prepared by name to continue.");
       return;
     }
     // The approver is nominated in the composer so the voucher lands with the
@@ -542,7 +587,7 @@ const Index = () => {
       being_payment: form.beingPayment.trim(),
       payment_method: form.paymentMethod,
       reference: form.reference.trim() || null,
-      department_id: selectedDepartment.id,
+      department_id: selectedDepartment?.id ?? null,
       company_id: myCompanyId,
       prepared_by: user.id,
       prepared_by_name: form.preparedBy.trim(),
@@ -566,7 +611,7 @@ const Index = () => {
     }
     const mapped = mapVoucher(data, departmentMap, companyMap);
     setVouchers((current) => [mapped, ...current]);
-    setForm({ ...emptyForm, preparedBy: displayName, department: selectedDepartment.name });
+    setForm({ ...emptyForm, preparedBy: displayName });
     setShowComposer(false);
     setView("pending");
     setSearchParams({ view: "pending" }, { replace: true });
@@ -760,13 +805,13 @@ const explainDeleteError = (error: { message?: string } | null): string => {
       if (voucher.status !== "Pending approval") return false;
       if (voucher.date.slice(0, 7) !== approvalMonth) return false;
       if (!matchesBranch(voucher)) return false;
-      if (approvalDept !== "All departments" && voucher.department !== approvalDept) return false;
+      
       if (!term) return true;
       return `${voucher.voucherNo} ${voucher.paidTo} ${voucher.beingPayment} ${voucher.reference} ${voucher.preparedBy} ${voucher.assignedApproverName}`
         .toLowerCase()
         .includes(term);
     });
-  }, [approvalDept, approvalMonth, approvalSearch, matchesBranch, vouchers]);
+  }, [approvalMonth, approvalSearch, matchesBranch, vouchers]);
 
   const approvalTotal = approvalVouchers.reduce((sum, voucher) => sum + voucher.amount, 0);
   // Only allow ticking what can actually be approved, so the count always matches
@@ -860,7 +905,6 @@ const explainDeleteError = (error: { message?: string } | null): string => {
       ...emptyForm,
       date: new Date().toISOString().slice(0, 10),
       preparedBy: displayName,
-      department: form.department || departments[0]?.name || "",
       approverId: suggested?.id ?? "",
     });
     setShowComposer(true);
@@ -979,8 +1023,8 @@ const explainDeleteError = (error: { message?: string } | null): string => {
 
   const approvedVouchers = useMemo(() => vouchers.filter((voucher) => voucher.status === "Approved").filter((voucher) => {
     const searchable = `${voucher.voucherNo} ${voucher.paidTo} ${voucher.beingPayment} ${voucher.reference}`.toLowerCase();
-    return matchesBranch(voucher) && searchable.includes(approvedSearch.toLowerCase()) && (approvedDept === "All departments" || voucher.department === approvedDept) && (!approvedFrom || voucher.date >= approvedFrom) && (!approvedTo || voucher.date <= approvedTo);
-  }), [approvedDept, approvedFrom, approvedSearch, approvedTo, matchesBranch, vouchers]);
+    return matchesBranch(voucher) && searchable.includes(approvedSearch.toLowerCase()) && (!approvedFrom || voucher.date >= approvedFrom) && (!approvedTo || voucher.date <= approvedTo);
+  }), [approvedFrom, approvedSearch, approvedTo, matchesBranch, vouchers]);
 
   const approvedPages = Math.max(1, Math.ceil(approvedVouchers.length / pageSize));
   const safeApprovedPage = Math.min(approvedPage, approvedPages);
@@ -1013,7 +1057,9 @@ const explainDeleteError = (error: { message?: string } | null): string => {
   const openImporter = (status: VoucherStatus) => {
     if (!canPrepare) { setNotice("Bulk import is reserved for preparers."); return; }
     setImportStatus(status);
-    setImportDefaults((current) => ({ ...current, department: current.department || departments[0]?.name || "" }));
+    // The department is the preparer's own branch, so there is nothing to choose
+    // here. The picker defaulted to departments[0], which is how imported rows
+    // came out as "General".
     setImportRows([]);
     setImportFile(null);
     setImportError("");
@@ -1203,8 +1249,11 @@ const explainDeleteError = (error: { message?: string } | null): string => {
       setImportError("Nothing to import. Tick at least one row that has a date, an amount, a payee and a payment purpose.");
       return;
     }
-    const fallbackDept = departments.find((d) => d.name === "General") || departments[0];
-    if (!fallbackDept) { setImportError("No departments exist. Ask your workspace admin to add one first."); return; }
+    // A voucher's department is its branch, so the import stamps the preparer's own
+    // branch. It used to fall back to "General", which is why every one of the 780
+    // bulk-imported vouchers came out reading "General" instead of "Longhorn
+    // Associates" even though company_id was correct on every row.
+    const branchDept = departmentForBranch(departments, myBranchLabel);
 
     setImporting(true);
     setImportProgress(0);
@@ -1224,7 +1273,6 @@ const explainDeleteError = (error: { message?: string } | null): string => {
         return;
       }
       const payload = valid.map((row) => {
-        const dept = departments.find((d) => d.name.toLowerCase() === row.department.trim().toLowerCase()) || fallbackDept;
         const amount = importRowAmount(row);
         const currency = (row.currency.trim() || "ZMW").toUpperCase();
         return {
@@ -1237,7 +1285,7 @@ const explainDeleteError = (error: { message?: string } | null): string => {
           being_payment: row.beingPayment.trim(),
           payment_method: row.paymentMethod.trim() || "Bank transfer",
           reference: row.reference.trim() || null,
-          department_id: dept.id,
+          department_id: branchDept?.id ?? null,
           company_id: myCompanyId,
           prepared_by: user.id,
           prepared_by_name: displayName,
@@ -1313,9 +1361,6 @@ const explainDeleteError = (error: { message?: string } | null): string => {
               monthsWithVouchers={monthsWithVouchers}
               search={approvalSearch}
               onSearchChange={setApprovalSearch}
-              department={approvalDept}
-              onDepartmentChange={(value) => { setApprovalDept(value); setApprovalSelected([]); }}
-              departments={departments.map((item) => item.name)}
               selected={approvalSelected}
               onToggle={toggleApprovalSelected}
               onToggleAll={toggleAllApprovalSelected}
@@ -1445,11 +1490,12 @@ const explainDeleteError = (error: { message?: string } | null): string => {
                       </select>
                     </label>
 <label className="field">
-                      <span>Department for these rows</span>
-                      <select value={importDefaults.department} onChange={(event) => patchImportDefaults("department", event.target.value)}>
-                        {departments.length === 0 && <option value="">No departments yet</option>}
-                        {departments.map((department) => <option key={department.id} value={department.name}>{department.name}</option>)}
-                      </select>
+                      <span>Department (branch)</span>
+                      <div className="input-icon">
+                        <Building2 size={15} />
+                        <Input value={myBranchLabel || "Your branch"} readOnly />
+                      </div>
+                      <small className="field-hint">Taken from your profile, so every imported row lands in the right branch's books.</small>
                     </label>
                     <label className="field">
                       <span>Currency when the file has none</span>

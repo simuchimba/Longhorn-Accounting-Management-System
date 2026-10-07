@@ -40,6 +40,7 @@ dist-ssr
 # Scratch files psql writes when a verification script redirects its echo output
 # so the real check results stay readable. Harmless, regenerated on every run.
 align_dates_output.txt
+department_output.txt
 trigger_output.txt
 set_approval_output.txt
 attr_fix_output.txt

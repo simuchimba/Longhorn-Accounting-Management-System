@@ -25,6 +25,7 @@ const RUNNABLE = [
   "prevent_duplicate_vouchers.sql",
   "align_approval_dates.sql",
   "set_approval_date_from_created.sql",
+  "fix_voucher_department.sql",
 ];
 
 const findPsql = () => {
