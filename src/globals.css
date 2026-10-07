@@ -185,10 +185,33 @@
 @media print {
   @page { size: A4; margin: 12mm; }
   body { background: #fff; }
-  .app-shell > *:not(.print-only) { display: none !important; }
+
+  /* Hide everything mounted directly under <body> except the sheets.
+
+     The sheets are portalled to <body>, so `.print-only` is a sibling of the
+     React root. Hiding the root here is what keeps the sidebar, top bar and any
+     open dialog out of the printed output.
+
+     This must stay "direct child of body". The previous rule reached in from
+     `.app-shell`, which assumed the sheets sat beside the shell rather than
+     inside it: AppShell nests children in `.content-wrap` inside
+     `.main-content`, so that rule hid `.main-content` and every sheet with it.
+     Printing produced blank pages. */
+  body > *:not(.print-only) { display: none !important; }
   .print-only { display: block !important; }
-  .print-only .print-voucher { margin: 0 auto 20mm; border: 1px solid #111; box-shadow: none; page-break-after: always; }
-  .print-only .print-voucher:last-child { page-break-after: auto; }
+
+  /* One sheet per page, and nothing left over to spill onto a final blank one. */
+  .print-only .print-voucher {
+    margin: 0 auto 20mm;
+    border: 1px solid #111;
+    box-shadow: none;
+    page-break-after: always;
+    break-after: page;
+  }
+  .print-only .print-voucher:last-child { page-break-after: auto; break-after: auto; }
+
+  /* Nothing on a screen voucher should survive onto paper. */
+  .print-only img { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
 
 /* ------------------------------------------------------------- help centre */

@@ -219,6 +219,13 @@ asking the browser to render several hundred at once stalls the print dialog bad
 look like a crash. Above the limit the app says so and tells you to narrow the date range,
 rather than freezing the tab.
 
+> **If printing comes out blank, check the rule in `@media print`.** The sheets are portalled
+> to `<body>` on purpose. The stylesheet hides `body > *:not(.print-only)`, which only works
+> while the sheets really are a direct child of `<body>`. An earlier version reached in from
+> `.app-shell` instead, which hid `.main-content` — and every sheet inside it came out at zero
+> height, so every page printed blank. If the `.print-only` markup is ever moved back inside
+> the app shell, printing breaks again.
+
 **Rows per page.** The pager under each table has a **Rows** picker: 10, 25, 50, 100, 150 or
 200. It appears as soon as there is anything in the list, so you can find it before you need
 it, and the choice is remembered on that browser for next time. One setting covers both

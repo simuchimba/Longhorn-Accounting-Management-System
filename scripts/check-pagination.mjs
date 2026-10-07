@@ -157,8 +157,7 @@ check("select-all is still offered when the list overflows a page", /!everyAppro
 check("the approved page says it prints", /print them together as one batch/.test(index));
 check("the selection shows what will be printed", /ready to print, one sheet each/.test(index));
 
-console.log("\n-- the pager itself --");
-check("offers every page size", /PAGE_SIZE_OPTIONS\.map/.test(pager));
+console.log("\n-- the pager itself --");check("offers every page size", /PAGE_SIZE_OPTIONS\.map/.test(pager));
 check("labels the control for a screen reader", /aria-label="Rows shown per page"/.test(pager));
 check("appears as soon as there is anything to list", /if \(total <= 0\) return null/.test(pager));
 check("hides the page numbers when they would not help", /pages > 7 \? pageNumbers/.test(pager));
@@ -170,6 +169,26 @@ check("the pager wraps on narrow screens", /\.pagination-bar \{ flex-wrap: wrap;
 // container by 17px before this rule existed.
 check("the numbered buttons wrap too", /\.page-buttons \{ flex-wrap: wrap; \}/.test(styles));
 check("the selection bar wraps on narrow screens", /\.selection-bar \{ flex-wrap: wrap; \}/.test(styles));
+
+// --- the sheets actually reach the paper -------------------------------------
+// Printing produced completely blank pages, which no other check here could see.
+// The stylesheet hid ".app-shell > *:not(.print-only)", assuming the sheets sat
+// beside the app shell. AppShell nests its children in .content-wrap inside
+// .main-content, so that rule hid .main-content and every sheet inside it:
+// measured, each .print-voucher had a height of 0. The sheets are now portalled
+// to <body>, which is what the rule assumed, so it is asserted here.
+console.log("\n-- the sheets reach the paper --");
+check("the sheets are portalled to <body>", /createPortal\([\s\S]{0,400}document\.body/.test(index));
+check("the portal wraps the print area", /createPortal\(\s*<div className="print-only">/.test(index));
+check("print media hides by position under body", /body > \*:not\(\.print-only\)/.test(styles));
+check("print media no longer reaches in from the shell", !/\.app-shell > \*:not\(\.print-only\)/.test(styles));
+check("the reason is written down where the rule lives", /\.print-only\).*direct child of <body>/s.test(styles) || /must stay "direct child of body"/.test(styles));
+check("the app shell is not the hiding anchor any more", !/\.app-shell\s*>\s*\*/.test(styles.replace(/\/\*[\s\S]*?\*\//g, "")));
+check("each sheet breaks to its own page", /page-break-after: always/.test(styles) && /break-after: page/.test(styles));
+check("the last sheet does not leave a trailing blank page", /\.print-only \.print-voucher:last-child \{[^}]*break-after: auto/.test(styles));
+check("the logo is told to keep its colour when printed", /\.print-only img \{[^}]*print-color-adjust: exact/.test(styles));
+check("the sheets stay hidden on screen", /\.print-only \{ display: none; \}/.test(styles));
+check("the print is triggered once the sheets are ready", /window\.print\(\)/.test(index));
 
 console.log(failed ? `\n${failed} check(s) failed` : "\nAll page-size and bulk-print checks passed");
 process.exit(failed ? 1 : 0);
