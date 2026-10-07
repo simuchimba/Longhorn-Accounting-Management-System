@@ -164,28 +164,6 @@ real payments. A duplicate is the same invoice paid twice, not two payments on o
 
 ### 8. Make the approval date match the date on the voucher
 
-Run `database/align_approval_dates.sql` in the SQL Editor. Section 1 is read-only and shows
-the gap first.
-
-An approved voucher's `approved_at` is set to its own `voucher_date`, so the record and the
-printed sheet agree. `voucher_date` itself is never touched, so nothing moves between months:
-a payment dated 15 January stays in January in every list, report and monthly approval view.
-
-The original timestamp is not lost. It moves to `approved_recorded_at`, so you can still
-audit exactly when each approval happened in the system:
-
-```sql
-select voucher_no, voucher_date, approved_at, approved_recorded_at
-  from public.vouchers
- where approved_recorded_at is not null
- order by approved_recorded_at desc;
-```
-
-A trigger keeps this true for future approvals, so it holds for the composer, the monthly
-bulk approval and the bulk importer alike.
-
-### 9. Make the approval date match the date on the voucher
-
 Run `database/align_approval_dates.sql` in the SQL Editor. Paste the whole file and click Run.
 Its opening sections are read-only and show the gap, plus how far `created_at` and the
 voucher's own date diverge.
@@ -224,6 +202,31 @@ switches you over and is idempotent.
 > script does that, and `npm run db:verify` includes a check that installs the old trigger
 > first, so this cannot regress silently.
 
+### 9. Print vouchers in bulk, and choose how many rows a page shows
+
+No setup. This is all in the app.
+
+**Bulk printing.** Both **Pending vouchers** and **Approved vouchers** have a tick box per row
+and a **Print selected (n)** button. Each voucher prints as its own A4 sheet, one per page,
+with the approver's name and the voucher's own date on it.
+
+To print a whole month without ticking 780 boxes, use **Select all n vouchers**. It is always
+visible once the list is longer than one page, so you do not have to tick the page checkbox
+first. Narrow the list with the search box, the branch filter or the date range, then print.
+
+**There is a limit of 100 vouchers per print job.** Each one is a full sheet of paper, and
+asking the browser to render several hundred at once stalls the print dialog badly enough to
+look like a crash. Above the limit the app says so and tells you to narrow the date range,
+rather than freezing the tab.
+
+**Rows per page.** The pager under each table has a **Rows** picker: 10, 25, 50, 100, 150 or
+200. It appears as soon as there is anything in the list, so you can find it before you need
+it, and the choice is remembered on that browser for next time. One setting covers both
+tables.
+
+Changing the size returns you to the first page, so you never land on a page that no longer
+exists.
+
 ## Verifying the rules locally
 
 The migration can be tested without touching Supabase. This builds a throwaway database,
@@ -261,6 +264,17 @@ These prove the month scoping, that drafts and already-approved rows are never s
 that the approval stamp comes from the caller's profile rather than the request body, and
 that the approver role is re-checked server-side.
 
+The page size and bulk printing have theirs:
+
+```bash
+npm run test:pagination
+```
+
+That one executes `src/lib/pagination.ts` rather than pattern-matching it, so the paging
+arithmetic is really run: an out-of-range page, a page that vanishes when the size changes,
+a stored value edited to something unoffered, and the print limit are all exercised. It also
+asserts the wiring, including that no print path bypasses the limit.
+
 ## Layout
 
 ```
@@ -288,6 +302,8 @@ src/
   pages/ApprovalsPanel.tsx      monthly sign-off for approvers
   pages/Admin.tsx               the admin panel
   components/AppShell.tsx       sidebar and top bar shared by both pages
+  components/PaginationBar.tsx  rows-per-page picker and page buttons
+  lib/pagination.ts             paging and bulk-print rules
   lib/api.ts                    client for the server layer
 ```
 
