@@ -33,7 +33,20 @@ check("says voucher_date is never touched", /voucher_date is never touched/.test
 check("says no voucher changes month", /no voucher changes month/i.test(sql));
 
 // --- review before change ----------------------------------------------------
-check("shows the gap before changing anything", /Read-only\. Shows the gap between/.test(sql));
+// --- the ordering fault that left 780 vouchers showing the batch date -------
+// The old trigger must be dropped BEFORE any row is written, or it rewrites each
+// one as it lands. Asserted on position, because that is what failed.
+const dropIndex = sql.indexOf("drop trigger if exists trg_vouchers_approval_date on public.vouchers;");
+const updateIndex = sql.indexOf("set approved_at = voucher_date::timestamptz\n where status = 'Approved'");
+const createIndex = sql.indexOf("create trigger trg_vouchers_align_approval_date");
+check("the superseded trigger is dropped before any row is written", dropIndex > 0 && dropIndex < updateIndex);
+check("the new trigger is created only after the rows are fixed", updateIndex < createIndex);
+check("the ordering trap is explained in the file", /ORDER MATTERS, and getting it wrong is silent/.test(sql));
+check("it names the symptom it caused", /780 vouchers/.test(sql));
+check("the regression check installs the old trigger first", /_trigger_order_verify/.test(read("database/verify-trigger-order.mjs")));
+check("wired into db:verify", /verify-trigger-order/.test(scripts["db:verify"] ?? ""));
+
+// --- review before change ----------------------------------------------------
 check("compares created_at against the voucher date", /created_at vs the date on the voucher/.test(sql));
 check("counts how far apart they are", /different_month/.test(sql));
 

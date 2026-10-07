@@ -214,6 +214,12 @@ batch date and September vouchers kept showing an October approval date. It is m
 SUPERSEDED. If you already ran it, just run `align_approval_dates.sql` afterwards — it
 switches you over and is idempotent.
 
+> **Why running it twice earlier did nothing.** That script also left a trigger behind which
+> forced `approved_at` back to `created_at` on every update. The fix has to drop that trigger
+> *before* it writes any rows, or the trigger overwrites each one as it lands. The current
+> script does that, and `npm run db:verify` includes a check that installs the old trigger
+> first, so this cannot regress silently.
+
 ## Verifying the rules locally
 
 The migration can be tested without touching Supabase. This builds a throwaway database,

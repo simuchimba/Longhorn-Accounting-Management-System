@@ -129,7 +129,31 @@ select
 
 
 -- ---------------------------------------------------------------------------
---  2. Keep the real timestamp, then align the date.
+--  2. Remove the old trigger FIRST, then fix the rows.
+-- ---------------------------------------------------------------------------
+--  ORDER MATTERS, and getting it wrong is silent.
+--
+--  An earlier attempt installed trg_vouchers_approval_date, which forces
+--  approved_at back to created_at on every update. If it is still installed when
+--  the UPDATE below runs, it overwrites each row the instant it is written, and
+--  the whole fix is silently undone. That is exactly what happened: 780 vouchers
+--  read as "approved on 05 Oct" no matter how many times this script was run.
+--
+--  So the trigger is dropped before anything is written, not after.
+
+drop trigger if exists trg_vouchers_approval_date on public.vouchers;
+drop trigger if exists trg_vouchers_align_approval_date on public.vouchers;
+
+\echo ''
+\echo '--- triggers that could rewrite the approval date (expect none) ---'
+select tgname
+  from pg_trigger
+ where tgrelid = 'public.vouchers'::regclass
+   and not tgisinternal
+   and tgname in ('trg_vouchers_approval_date', 'trg_vouchers_align_approval_date');
+
+-- ---------------------------------------------------------------------------
+--  3. Keep the real timestamp, then align the date.
 -- ---------------------------------------------------------------------------
 alter table public.vouchers
   add column if not exists approved_recorded_at timestamptz;
@@ -170,7 +194,7 @@ update public.vouchers
 
 
 -- ---------------------------------------------------------------------------
---  3. Keep it that way for future rows, so it does not drift back.
+--  4. Keep it that way for future rows, so it does not drift back.
 -- ---------------------------------------------------------------------------
 create or replace function public.vouchers_align_approval_date()
 returns trigger
@@ -196,13 +220,11 @@ create trigger trg_vouchers_align_approval_date
   before insert or update of status, approved_at, voucher_date
     on public.vouchers
     for each row execute function public.vouchers_align_approval_date();
-
--- The other attempt installed a trigger that would fight this one.
-drop trigger if exists trg_vouchers_approval_date on public.vouchers;
+-- (the superseded trigger was already dropped in section 2, before any row was written)
 
 
 -- ---------------------------------------------------------------------------
---  4. Verify. Every count below should now be zero.
+--  5. Verify. Every count below should now be zero.
 -- ---------------------------------------------------------------------------
 \echo ''
 \echo '=== after: approval date matches the date on every voucher ==='
