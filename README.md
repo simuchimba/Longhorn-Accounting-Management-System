@@ -184,6 +184,24 @@ select voucher_no, voucher_date, approved_at, approved_recorded_at
 A trigger keeps this true for future approvals, so it holds for the composer, the monthly
 bulk approval and the bulk importer alike.
 
+### 9. Set the approval date to the voucher's creation date
+
+Run `database/set_approval_date_from_created.sql` in the SQL Editor. Section 1 shows the
+problem by month and section 2 lists back-dated vouchers, both read-only, so you can check
+before changing anything.
+
+`approved_at` becomes the voucher's **creation date**. Your September vouchers stop showing
+an October approval date, which was the day the batch was loaded rather than a date anything
+was signed.
+
+`voucher_date` is never touched, so no voucher changes month in any list or report. The
+original timestamp is preserved in `approved_recorded_at`.
+
+> **Note:** `align_approval_dates.sql` does the same thing but uses `voucher_date` instead of
+> `created_at`. They agree for every voucher entered on the day it is dated, and differ only
+> for back-dated entries. **Run one, not both** — whichever you run last wins. If you already
+> ran `align_approval_dates.sql`, run this one afterwards to switch to the creation date.
+
 ## Verifying the rules locally
 
 The migration can be tested without touching Supabase. This builds a throwaway database,
