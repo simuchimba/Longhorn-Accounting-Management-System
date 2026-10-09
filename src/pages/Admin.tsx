@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Building2,
@@ -73,7 +73,11 @@ const Admin = () => {
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [companies, setCompanies] = useState<Company[]>([]);
   const [overview, setOverview] = useState<AdminOverview | null>(null);
+  // Separate from `loading`: the splash should only cover the first load. A
+  // refetch, or coming back to the tab, must leave the panel on screen.
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const hasLoadedOnceRef = useRef(false);
   const [fatal, setFatal] = useState("");
 
   const [search, setSearch] = useState("");
@@ -86,13 +90,15 @@ const Admin = () => {
   const [passwordFor, setPasswordFor] = useState<AdminUser | null>(null);
 
   const load = useCallback(async () => {
-    setLoading(true);
+    if (hasLoadedOnceRef.current) setRefreshing(true);
+    else setLoading(true);
     setFatal("");
     try {
       const [usersData, overviewData] = await Promise.all([fetchAdminUsers(), fetchAdminOverview()]);
       setUsers(usersData.users);
       setCompanies(usersData.companies);
       setOverview(overviewData);
+      hasLoadedOnceRef.current = true;
     } catch (error) {
       if (error instanceof ApiError && error.status === 403) {
         setFatal("This panel is for workspace admins. Ask an admin if you need access to it.");
@@ -100,6 +106,7 @@ const Admin = () => {
         setFatal(error instanceof Error ? error.message : "Could not load the admin panel.");
       }
     } finally {
+      setRefreshing(false);
       setLoading(false);
     }
   }, []);
@@ -198,6 +205,15 @@ const Admin = () => {
             <Loader2 size={20} className="animate-spin" />
           </div>
           <span>Loading your workspace...</span>
+        </div>
+      )}
+
+      {/* A refresh keeps the panel mounted and just marks it busy, so coming back
+          to the tab never replaces the content with the splash again. */}
+      {!loading && refreshing && (
+        <div className="notice" role="status">
+          <Loader2 size={16} className="animate-spin" />
+          <span>Refreshing...</span>
         </div>
       )}
 

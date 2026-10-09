@@ -64,8 +64,14 @@ export const SessionContextProvider = ({ children }: { children: ReactNode }) =>
     };
   }, []);
 
+  // Keyed on the user id rather than the session object. Supabase hands out a new
+  // session object every time the token refreshes, which it does on its own when
+  // a backgrounded tab regains focus. Depending on the object meant returning to
+  // the tab refetched /api/me for a person who had not changed at all.
+  const userId = session?.user?.id || null;
+
   const refreshProfile = useCallback(async () => {
-    if (!session) {
+    if (!userId) {
       setProfile(null);
       return;
     }
@@ -95,12 +101,12 @@ export const SessionContextProvider = ({ children }: { children: ReactNode }) =>
     } finally {
       setProfileLoading(false);
     }
-  }, [session]);
+  }, [userId]);
 
   useEffect(() => {
-    if (!session) return;
+    if (!userId) return;
     void refreshProfile();
-  }, [session, refreshProfile]);
+  }, [userId, refreshProfile]);
 
   const value = useMemo(
     () => ({ session, user: session?.user || null, profile, loading, profileLoading, profileError, needsMigration, setupRequired, refreshProfile }),

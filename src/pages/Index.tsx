@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -293,6 +293,10 @@ const Index = () => {
   const [approvers, setApprovers] = useState<DirectoryMember[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [vouchers, setVouchers] = useState<Voucher[]>([]);
+  // True once a fetch has actually produced data, so later refreshes know to keep
+  // the existing rows on screen rather than flashing the splash again.
+  const hasLoadedOnceRef = useRef(false);
+
   const [loading, setLoading] = useState(true);
   const [companyFilter, setCompanyFilter] = useState(ALL_COMPANIES);
   const [showComposer, setShowComposer] = useState(false);
@@ -355,6 +359,14 @@ const Index = () => {
   const [settingsBusy, setSettingsBusy] = useState<"name" | "email" | "password" | "">("");
 
   const displayName = profile?.fullName || user?.user_metadata?.full_name || user?.email?.split("@")[0] || "Longhorn user";
+
+  // The loader reads this to seed the composer's "prepared by". It settles twice
+  // on a cold load -- first from the auth session, then again once /api/me
+  // returns the profile -- so it is held in a ref. Depending on the value itself
+  // re-ran the whole fetch a second time and blanked the screen for it.
+  const displayNameRef = useRef(displayName);
+  displayNameRef.current = displayName;
+
   const userRole = profile?.role || "preparer";
   const canPrepare = profile?.canPrepare ?? userRole !== "approver";
   const canApprove = profile?.isApprover ?? (userRole === "approver" || userRole === "admin");
@@ -373,8 +385,11 @@ const Index = () => {
 
   useEffect(() => {
     if (!session || !user) return;
+    let cancelled = false;
     const loadData = async () => {
-      setLoading(true);
+      // Only blank the screen on the very first load. After that the data is
+      // already on screen, so a refetch must not tear it down again.
+      setLoading((current) => (hasLoadedOnceRef.current ? false : current));
 
       // Companies and the approver list come from the server, which also resolves
       // role. If the multi-company migration has not been run there is nothing to
@@ -396,6 +411,7 @@ const Index = () => {
       }
 
       const firstError = departmentsResponse.error || voucherError;
+      if (cancelled) return;
       if (firstError) {
         setNotice(firstError.message);
       } else {
@@ -425,7 +441,7 @@ const Index = () => {
         setVouchers(mapped);
         setForm((current) => ({
           ...current,
-          preparedBy: current.preparedBy || displayName,
+          preparedBy: current.preparedBy || displayNameRef.current,
         }));
 
         // No branch department and no other department is not a reason to block anyone.
@@ -433,10 +449,22 @@ const Index = () => {
         // mapVoucher reads company_id first.
         if (!loadedDepartments.length) setNotice("No branch has a department record yet, so vouchers will be stamped with the branch name only.");
       }
+      // Record that real data has landed before clearing `loading`, so the next
+      // refetch takes the non-blanking path.
+      hasLoadedOnceRef.current = true;
       setLoading(false);
     };
     void loadData();
-  }, [displayName, session, user]);
+    return () => {
+      cancelled = true;
+    };
+  // Deliberately keyed on the user id only. Adding `session` back would
+    // reintroduce the bug: the session object is replaced on every token refresh,
+    // including the automatic one when a backgrounded tab regains focus, and the
+    // ledger would refetch and blank the screen each time. `user` is only read as
+    // a guard above, and the id already covers it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.user?.id, user?.id]);
 
   useEffect(() => {
     if (!printVouchers.length) return;
