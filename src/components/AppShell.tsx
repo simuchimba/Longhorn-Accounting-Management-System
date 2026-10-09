@@ -104,7 +104,7 @@ const AppShell = ({ active, onNavigate, user, counts, onSignOut, children }: App
     <div className="app-shell">
       <aside className={`sidebar ${navOpen ? "sidebar-open" : ""}`}>
         <div className="flex items-center justify-between">
-          <Logo />
+          <Logo branchCode={user?.company?.code} branchName={company} />
           <button className="mobile-close" onClick={() => setNavOpen(false)} aria-label="Close navigation">
             <X size={20} />
           </button>

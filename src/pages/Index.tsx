@@ -269,9 +269,16 @@ const departmentForBranch = (departments: Department[], branchName: string | und
 
 const StatusBadge = ({ status }: { status: VoucherStatus }) => <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${statusStyles[status]}`}><span className="h-1.5 w-1.5 rounded-full bg-current" />{status}</span>;
 
+/**
+ * The printed voucher.
+ *
+ * The mark is the one belonging to the branch that raised the payment, not the
+ * branch of whoever happens to be printing it, so an approver clearing a month
+ * across all three arms gets each voucher on its own company's paper.
+ */
 const VoucherPrint = ({ voucher }: { voucher: Voucher }) => (
   <article className="print-voucher">
-    <div className="print-brand-row"><Logo height={58} /></div>
+    <div className="print-brand-row"><Logo height={58} branchCode={voucher.companyCode} branchName={voucher.companyName} /></div>
     <div className="print-rule" /><h1>PAYMENT VOUCHER</h1>
     <div className="print-meta-grid"><strong>PV NO. <span>{voucher.voucherNo}</span></strong><strong>TPIN: <span>1009055576</span></strong><strong>Date: <span>{formatDate(voucher.date)}</span></strong></div>
     <div className="print-body"><div className="print-line"><b>Amount:</b><span className="amount-box">{formatMoney(voucher.amount, voucher.currency)}</span></div><div className="print-line"><b>Amount paid to:</b><span>{voucher.paidTo}</span></div><div className="print-line print-tall"><b>Amount in words:</b><span>{voucher.amountWords}</span></div><div className="print-line print-tall"><b>Being Payment:</b><span>{voucher.beingPayment}</span></div><div className="print-detail-row"><span><b>Department:</b> {voucher.department}</span><span><b>Payment:</b> {voucher.paymentMethod}</span><span><b>Reference:</b> {voucher.reference || "—"}</span></div></div>
