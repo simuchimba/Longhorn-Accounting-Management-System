@@ -1,14 +1,15 @@
 # Longhorn Ledger
 
 A payment voucher system for the Longhorn group: Longhorn Associates, Longhorn Financial
-Services and Longhorn Insurance Broking all keep their books in one ledger, and no
-company can see another company's vouchers.
+Services and Longhorn Insurance Broking all keep their books in one ledger, each
+preparer works in a workspace of their own, and no company can see another company's
+vouchers.
 
 ## What each role can do
 
 | Role | Create vouchers | See vouchers | Approve | Admin panel |
 | --- | --- | --- | --- | --- |
-| **Preparer** | Yes, always stamped with their own branch | Only their own branch | No | No |
+| **Preparer** | Yes, always stamped with their own branch | Only the vouchers they prepared themselves | No | No |
 | **Approver** | No | Every branch, with a branch filter | Yes, one at a time or a whole month | No |
 | **Admin** | Yes | Every branch, with a branch filter | Yes, one at a time or a whole month | Yes |
 
@@ -54,8 +55,9 @@ NITRO_SUPABASE_SERVICE_KEY     production   (sb_secret_...)
 Setting them in `.env` alone does nothing for the deployed site. If the admin panel reports
 a missing credential, it means the current deployment predates the variable.
 
-Without the secret key everything still works — sign-in, vouchers, branch visibility and
-monthly approval. Only "Add person", access toggles and password resets are blocked.
+Without the secret key everything still works — sign-in, vouchers, per-preparer workspaces
+and monthly approval. Only "Add person", access toggles, password resets and reliable
+voucher numbering are affected; see section 11.
 
 ### 3. Run the database migration
 
@@ -66,7 +68,8 @@ idempotent, so it is safe to run again. It:
 - adds `profiles.company_id`, `vouchers.company_id` and
   `vouchers.assigned_approver_id`
 - backfills existing users and vouchers, so nothing is left unassigned
-- installs the RLS policies that keep each branch's vouchers private
+- installs the RLS policies that keep each preparer inside their own workspace,
+  and each branch's vouchers out of the other branches
 
 Existing users are matched to a branch by email domain. If your staff use different
 domains, edit the `CASE` in section 4 of that file before running it, or set each
@@ -268,6 +271,49 @@ tables.
 Changing the size returns you to the first page, so you never land on a page that no longer
 exists.
 
+## 11. Give each preparer a workspace of their own
+
+A preparer's workspace used to be their branch. Everyone at Longhorn Associates shared one
+set of books, so two people preparing payments there both saw every voucher the other had
+entered. Your own draft sat in a list you could not tell apart from a colleague's, it was
+easy to print or export the wrong one, and the totals on the overview blended several
+people's work rather than your own.
+
+Run `database/per_preparer_workspace.sql` in the SQL Editor. It is idempotent, and it
+rewrites no data. Voucher numbers, amounts, dates, branches, approvers and approval trails
+are all left exactly as they are. It only changes who may read and write each row.
+
+What moves:
+
+- a preparer reads, edits and deletes only the vouchers they prepared themselves
+- a preparer cannot file a voucher under a colleague's name, which would otherwise put it in
+  that colleague's workspace
+- a preparer still creates vouchers in their own branch, and can still never move one to
+  another branch
+
+What deliberately does not move: approvers still read every branch, because approving a
+month means seeing other people's vouchers, and admins still see everything.
+
+### Check this before you run it
+
+The file's first section lists any voucher with nobody recorded as raising it. Those rows
+would be invisible to every preparer afterwards, so they need an owner assigned by hand
+with an update against `public.vouchers` setting `prepared_by` and `prepared_by_name`.
+
+### The voucher number problem this creates
+
+`vouchers.voucher_no` is unique across the whole ledger, and the number used to be picked
+from the rows the browser could see. With private workspaces a preparer only sees their own
+vouchers, so the sequence would restart at 1 for each of them and two people paying on the
+same day would keep picking the same number.
+
+Numbering now goes through the `next-no` voucher endpoint, which reads past row level
+security with the service key. It returns only voucher numbers for the months asked about,
+never a payee, an amount, a branch or a preparer, and it refuses outright for anyone who
+cannot create vouchers. Without `NITRO_SUPABASE_SERVICE_KEY` it returns 503 and the browser
+falls back to the old behaviour, which is degraded rather than broken: a clash is refused
+by the unique constraint and reported as "that voucher number is already taken".
+
 ## Verifying the rules locally
 
 The migration can be tested without touching Supabase. This builds a throwaway database,
@@ -293,6 +339,18 @@ It needs `psql` and a superuser connection. Defaults to
   8 further rule checks reported PASS
 All multi-company rules verified.
 ```
+
+Per-preparer isolation has its own suite, which runs twice on the same database:
+
+```bash
+npm run test:workspace
+```
+
+The first pass runs **before** `per_preparer_workspace.sql` is applied and asserts that
+the problem is real, so the second pass cannot pass by accident against rules the harness
+was never measuring. The second pass then checks that a preparer is isolated from a
+colleague in the same branch, still has full control of their own vouchers, that approvers
+and admins keep group-wide visibility, and that exactly one policy survives per command.
 
 Bulk approval has its own checks:
 
@@ -343,13 +401,17 @@ department row yet, and a voucher with no branch at all.
 ```
 database/
   multi_company_setup.sql       the migration to run in Supabase
+  per_preparer_workspace.sql    each preparer gets a workspace of their own
   fix_role_edits.sql            one-off fix if Table Editor role changes revert
   align_approval_dates.sql      approval date = the date on the voucher
   fix_voucher_department.sql    a voucher's department is its branch
   verify-migration.mjs          local proof the rules hold  (npm run db:verify)
+  verify-per-preparer.mjs       per-preparer isolation checks  (npm run test:workspace)
   verify-department.mjs         the department checks
   _migration_test_setup.sql     stand-in schema for the test
   _migration_verify.sql         the branch-scoping checks
+  _per_preparer_fixture.sql     stand-in schema with two preparers in one branch
+  _per_preparer_verify.sql      the isolation checks
   _role_edit_verify.sql         dashboard-edit checks
   _revert_role_trigger.sql      fixture: the old buggy trigger, for regression testing
   longhorn_ledger_seed.sql      original local Postgres seed
@@ -360,6 +422,8 @@ server/
   routes/api/directory.get.ts   branches plus the approver dropdown list
   routes/api/vouchers/bulk-approve.post.ts
                                 approve a whole month in one request
+  routes/api/vouchers/next-no.post.ts
+                                voucher numbers already used, read past RLS
   routes/api/account/email.patch.ts  change your own sign-in email
   routes/api/admin/*            branch and user management, admin only
 

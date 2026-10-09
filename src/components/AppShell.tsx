@@ -28,12 +28,18 @@ type AppShellProps = {
   children: ReactNode;
 };
 
-/** Spells out what the signed-in person can actually do. */
+/**
+ * Spells out what the signed-in person can actually do.
+ *
+ * For a preparer this is deliberately "My own workspace" rather than the branch:
+ * their workspace holds the vouchers they raised, not their colleagues', and
+ * saying so in the corner is what stops the two lists being confused.
+ */
 const workspaceLabel = (user: CurrentUser | null) => {
   if (!user) return "Signing in";
   if (user.role === "approver") return "Approval workspace";
   if (user.role === "admin") return "Admin workspace";
-  return "Preparer workspace";
+  return "My own workspace";
 };
 
 const NavItem = ({
@@ -64,9 +70,12 @@ const getInitials = (name: string) =>
 /**
  * The sidebar and top bar that every signed-in page sits inside.
  *
- * The workspace switcher shows the branch the signed-in person actually works
- * for, so a Longhorn Financial Services preparer can tell at a glance that they
- * are inside the LFS books and not the group-wide ones.
+ * The workspace switcher shows the branch the signed-in person works for, so a
+ * Longhorn Financial Services preparer can tell at a glance that a voucher is
+ * going to the LFS books and not the group-wide ones. It is the branch that is
+ * shown, because that is what a voucher belongs to, but what the person can
+ * actually see inside it is narrower: approvers and admins read every branch,
+ * and each preparer reads only the vouchers they raised themselves.
  */
 const AppShell = ({ active, onNavigate, user, counts, onSignOut, children }: AppShellProps) => {
   const [navOpen, setNavOpen] = useState(false);

@@ -1,5 +1,35 @@
 -- Longhorn Ledger - allow deleting vouchers
 --
+-- SUPERSEDED - do not re-run this file as-is.
+--
+-- Each preparer now has a workspace of their own, which means a preparer may
+-- only delete the vouchers they raised. That rule lives in
+-- database/per_preparer_workspace.sql, and it drops the policy this file
+-- creates.
+--
+-- Dropping it is not strictly what stops a preparer deleting a colleague's
+-- voucher: a row also has to satisfy the SELECT policy before DELETE can touch
+-- it, and the SELECT policy now hides those rows. It is dropped anyway because
+-- this rule says "any preparer may delete any voucher", which is not what the
+-- system means, and it would become a live hole the moment the SELECT rule was
+-- ever widened again. The DELETE rule to use instead:
+--
+--   drop policy if exists "vouchers_delete_preparers" on public.vouchers;
+--   drop policy if exists "vouchers_delete_companies" on public.vouchers;
+--   drop policy if exists "vouchers_delete_scoped"    on public.vouchers;
+--
+--   create policy "vouchers_delete_scoped"
+--     on public.vouchers for delete
+--     to authenticated
+--     using (
+--       public.current_user_is_admin()
+--       or (public.current_user_can_prepare() and public.user_owns_voucher(prepared_by))
+--     );
+--
+-- Or just run database/per_preparer_workspace.sql, which does all of that.
+-- Everything below is kept as the historical record of the original fix.
+-- ---------------------------------------------------------------------------
+--
 -- Symptom this fixes:
 --   "Could not delete: permission denied for table vouchers"
 --

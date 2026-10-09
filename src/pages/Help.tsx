@@ -36,7 +36,7 @@ const topics = (user: CurrentUser | null): Topic[] => {
       icon: FileText,
       question: "Why can't I see a voucher I know exists?",
       answer:
-        "Preparers only ever see their own branch's vouchers. That is enforced by the database, not just hidden in the screen. If a payment is missing, check which branch it was raised under, or ask an approver, who sees all three.",
+        "Your workspace holds only the vouchers you prepared yourself, so a colleague's payments will not appear. That is enforced by the database, not just hidden in the screen. If a payment you raised is missing, check which branch it was raised under, or ask an approver, who sees all three.",
     },
     {
       icon: Stamp,
@@ -66,7 +66,7 @@ const topics = (user: CurrentUser | null): Topic[] => {
       icon: ShieldCheck,
       question: "Who can see what?",
       answer:
-        "Preparers create vouchers for their own branch and see only that branch. Approvers see every branch and approve payments but do not create them. Admins do everything and manage people, roles and branches.",
+        "Each preparer creates vouchers in their own branch and sees only the ones they prepared, so nobody's list is mixed with a colleague's. Approvers see every branch and approve payments but do not create them. Admins do everything and manage people, roles and branches.",
     },
   ];
 

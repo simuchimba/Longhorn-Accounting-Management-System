@@ -39,7 +39,7 @@ import { ApiError, createCompany, createUser, fetchAdminOverview, fetchAdminUser
 import type { AdminOverview, AdminUser, Company, UserRole } from "@/lib/types";
 
 const ROLES: Array<{ value: UserRole; label: string; blurb: string }> = [
-  { value: "preparer", label: "Preparer", blurb: "Creates vouchers for their own branch and picks an approver." },
+  { value: "preparer", label: "Preparer", blurb: "Creates vouchers for their own branch, picks an approver, and sees only the vouchers they prepared." },
   { value: "approver", label: "Approver", blurb: "Sees every branch and approves payments." },
   { value: "admin", label: "Admin", blurb: "Everything an approver can do, plus managing people and branches." },
 ];
@@ -264,7 +264,7 @@ const Admin = () => {
             <div className="panel-heading">
               <div>
                 <h2>Branches</h2>
-                <p>Each branch keeps its own vouchers. Preparers only ever see their own.</p>
+                <p>Each branch keeps its own vouchers. Within a branch, each preparer has a workspace of their own.</p>
               </div>
               <Building2 size={17} className="text-[#9ca5b5]" />
             </div>

@@ -12,9 +12,13 @@
 --    3. vouchers.company_id  — which company a voucher belongs to
 --    4. vouchers.assigned_approver_id
 --                          — the approver a preparer nominated in the composer
---    5. Row Level Security   — preparers can only ever read/write their own
---                          company's vouchers; approvers and admins can read
---                          every company and filter in the UI
+--    5. Row Level Security   — each preparer can only ever read/write the
+--                          vouchers they raised themselves; approvers and
+--                          admins can read every company and filter in the UI
+--
+--    Per-preparer workspaces were tightened after this file was first written;
+--    database/per_preparer_workspace.sql is the change on its own and is the
+--    file to reach for if you only want that.
 --
 --  HOW TO RUN
 --    Supabase dashboard > SQL Editor > New query > paste this whole file > Run.
@@ -201,6 +205,8 @@ as $$
 $$;
 
 -- The single rule behind "each prepare only sees their own company's vouchers".
+-- Kept because approvers still read across companies, and because the undo
+-- block in database/per_preparer_workspace.sql restores it.
 create or replace function public.user_can_see_company(target_company uuid)
 returns boolean
 language sql
@@ -211,6 +217,19 @@ as $$
   select public.current_user_is_approver()
       or target_company is not null
          and target_company = public.current_profile_company_id();
+$$;
+
+-- The single rule behind "each preparer has a workspace of their own".
+-- A preparer sees only the vouchers they raised, so two people preparing
+-- payments for the same branch no longer share one mixed list.
+create or replace function public.user_owns_voucher(target_preparer uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select target_preparer is not null and target_preparer = auth.uid();
 $$;
 
 -- Who a preparer may nominate to sign off a payment. Admins are deliberately
@@ -238,6 +257,7 @@ revoke all on function public.current_user_is_approver()     from public;
 revoke all on function public.current_user_is_admin()         from public;
 revoke all on function public.current_user_can_prepare()     from public;
 revoke all on function public.user_can_see_company(uuid)     from public;
+revoke all on function public.user_owns_voucher(uuid)        from public;
 revoke all on function public.can_be_nominated_approver(uuid) from public;
 grant execute on function public.current_profile_role()          to authenticated;
 grant execute on function public.current_profile_company_id()   to authenticated;
@@ -245,6 +265,7 @@ grant execute on function public.current_user_is_approver()     to authenticated
 grant execute on function public.current_user_is_admin()         to authenticated;
 grant execute on function public.current_user_can_prepare()     to authenticated;
 grant execute on function public.user_can_see_company(uuid)     to authenticated;
+grant execute on function public.user_owns_voucher(uuid)        to authenticated;
 grant execute on function public.can_be_nominated_approver(uuid) to authenticated;
 
 
@@ -400,9 +421,9 @@ create policy "profiles_delete_admin"
   to authenticated
   using (public.current_user_is_admin());
 
--- Vouchers: read. Approvers and admins see every company. Everyone else sees
--- only their own company, plus anything they prepared themselves (so a voucher
--- stays visible to its author even if they are later moved).
+-- Vouchers: read. Approvers and admins see every company. Every preparer sees
+-- only the vouchers they raised themselves, so a branch's preparers never share
+-- one mixed list of payments.
 -- Note: inside a policy the row is referenced without a table alias, so these
 -- use bare column names rather than v.company_id.
 drop policy if exists "vouchers_select_scoped"   on public.vouchers;
@@ -415,54 +436,76 @@ create policy "vouchers_select_scoped"
   to authenticated
   using (
     public.current_user_is_approver()
-    or prepared_by = auth.uid()
-    or public.user_can_see_company(company_id)
+    or public.user_owns_voucher(prepared_by)
   );
 
--- Vouchers: write. A preparer may only create inside their own company.
-drop policy if exists "vouchers_insert_scoped" on public.vouchers;
+-- Vouchers: write. A preparer may only create inside their own branch, and may
+-- only file a voucher under their own name, so a payment they raise cannot end
+-- up sitting in a colleague's workspace.
+--
+-- "vouchers_insert_preparer" is an older PERMISSIVE policy whose only condition
+-- is (auth.uid()) = prepared_by. Permissive policies are ORed together, so while
+-- it survives it overrides this rule's with_check and lets an approver create a
+-- voucher, which no role other than preparer and admin may do.
+drop policy if exists "vouchers_insert_scoped"      on public.vouchers;
 drop policy if exists "vouchers_insert_own_company" on public.vouchers;
-drop policy if exists "vouchers_insert_preparers" on public.vouchers;
+drop policy if exists "vouchers_insert_preparers"   on public.vouchers;
+drop policy if exists "vouchers_insert_preparer"    on public.vouchers;
 create policy "vouchers_insert_scoped"
   on public.vouchers for insert
   to authenticated
   with check (
     public.current_user_can_prepare()
-    and (public.current_user_is_admin() or company_id = public.current_profile_company_id())
+    and (public.current_user_is_admin()
+         or (public.user_owns_voucher(prepared_by)
+             and company_id = public.current_profile_company_id()))
   );
 
 -- Vouchers: update. Approvers can approve anywhere; preparers can only touch
--- their own company's vouchers and can never move a voucher to another company.
-drop policy if exists "vouchers_update_approvers" on public.vouchers;
-drop policy if exists "vouchers_update_preparers" on public.vouchers;
-drop policy if exists "vouchers_update_scoped" on public.vouchers;
+-- the vouchers they raised, and can never move one to another branch or hand
+-- it to somebody else.
+--
+-- "vouchers_update_owner_or_approver" is an older PERMISSIVE policy with no
+-- branch check. It cannot widen anything while the SELECT rule above is
+-- owner-scoped, since UPDATE only reaches rows SELECT already allows, but it
+-- would follow the SELECT rule the moment that was ever widened.
+drop policy if exists "vouchers_update_approvers"         on public.vouchers;
+drop policy if exists "vouchers_update_preparers"         on public.vouchers;
+drop policy if exists "vouchers_update_owner_or_approver" on public.vouchers;
+drop policy if exists "vouchers_update_scoped"            on public.vouchers;
 create policy "vouchers_update_scoped"
   on public.vouchers for update
   to authenticated
   using (
     public.current_user_is_approver()
     or (public.current_user_can_prepare()
-        and (public.current_user_is_admin() or company_id = public.current_profile_company_id()))
+        and (public.current_user_is_admin()
+             or (public.user_owns_voucher(prepared_by)
+                 and company_id = public.current_profile_company_id())))
   )
   with check (
     public.current_user_is_approver()
     or (public.current_user_can_prepare()
-        and (public.current_user_is_admin() or company_id = public.current_profile_company_id()))
+        and (public.current_user_is_admin()
+             or (public.user_owns_voucher(prepared_by)
+                 and company_id = public.current_profile_company_id())))
   );
 
--- Vouchers: delete. Preparers may remove their own company's records; admins
--- may remove anything. Approvers never delete.
+-- Vouchers: delete. Preparers may remove the vouchers they raised; admins may
+-- remove anything. Approvers never delete.
+--
+-- "vouchers_delete_preparers" is dropped first because database/
+-- vouchers_rls_policies.sql adds that looser rule, which reads as "any preparer
+-- may delete any voucher". One rule per command, and it means "my own".
 drop policy if exists "vouchers_delete_preparers" on public.vouchers;
-drop policy if exists "vouchers_delete_scoped" on public.vouchers;
 drop policy if exists "vouchers_delete_companies" on public.vouchers;
+drop policy if exists "vouchers_delete_scoped" on public.vouchers;
 create policy "vouchers_delete_scoped"
   on public.vouchers for delete
   to authenticated
   using (
     public.current_user_is_admin()
-    or (public.current_user_can_prepare()
-        and company_id is not null
-        and company_id = public.current_profile_company_id())
+    or (public.current_user_can_prepare() and public.user_owns_voucher(prepared_by))
   );
 
 
@@ -490,15 +533,25 @@ create policy "vouchers_delete_scoped"
 --    and tablename in ('vouchers', 'profiles', 'companies')
 --  order by tablename, cmd, policyname;
 
--- e) While signed in as a Longhorn Financial Services preparer, this must return
---    false, and counting vouchers must only ever see their own branch.
+-- e) While signed in as a preparer, this must return their own count only,
+--    never their branch's. The last column is the one to read: true means the
+--    workspace really is private to them.
 -- select
 --   auth.uid() as caller,
 --   public.current_profile_role() as role,
 --   public.current_profile_company_id() as company_id,
 --   public.current_user_is_approver() as is_approver,
 --   public.current_user_can_prepare() as can_prepare,
---   (select count(*) from public.vouchers) as visible_vouchers;
+--   (select count(*) from public.vouchers) as visible_vouchers,
+--   (select count(*) from public.vouchers where prepared_by = auth.uid()) as my_vouchers,
+--   (select count(*) from public.vouchers)
+--     = (select count(*) from public.vouchers where prepared_by = auth.uid())
+--     as workspace_is_private;
+
+-- f) Vouchers with nobody recorded as raising them. These are invisible to
+--    every preparer after the rules above, so they need an owner assigned:
+-- select id, voucher_no, voucher_date from public.vouchers
+--  where prepared_by is null;
 
 -- Troubleshooting
 --   * "permission denied for table X" — a GRANT or policy is missing. Re-run
@@ -508,6 +561,7 @@ create policy "vouchers_delete_scoped"
 --     select count(*) from pg_policies
 --      where schemaname='public' and tablename='vouchers' and cmd='SELECT';
 --     The answer should be 1.
---   * Someone sees nothing — their profile row is missing or has no company_id:
+--   * Someone sees nothing — their profile row is missing, or they have simply
+--     not raised a voucher yet. Every preparer's workspace starts empty:
 --     select p.role, p.company_id, (select email from auth.users u where u.id = p.id)
 --       from public.profiles p where p.id = auth.uid();

@@ -22,8 +22,8 @@ export type { AdminOverview, AdminUser, Company, CurrentUser, DirectoryMember, U
  *
  * Note the split in responsibilities: voucher rows are read straight from
  * Supabase with the same session token, where Postgres row level security is what
- * keeps one branch's books private. This file covers identity, the approver
- * directory and everything the admin panel does.
+ * keeps a preparer inside their own workspace. This file covers identity, the
+ * approver directory, voucher numbering and everything the admin panel does.
  */
 
 export class ApiError extends Error {
@@ -172,3 +172,24 @@ export const bulkApproveVouchers = (ids: string[], month?: string) =>
     method: "POST",
     body: JSON.stringify({ ids, month }),
   });
+
+/* ---------------------------------------------------------------- numbering */
+
+export type TakenNumbers = {
+  /** Voucher numbers already used, keyed by month as `YYYY-MM`. */
+  numbersByMonth: Record<string, string[]>;
+};
+
+/**
+ * The voucher numbers already used in each of the given months.
+ *
+ * Voucher numbers are unique across the whole ledger, but a preparer only ever
+ * sees their own vouchers, so the browser cannot work out the next free number
+ * on its own without two people picking the same one. The server reads past row
+ * level security to answer, and gives nothing back except the numbers.
+ *
+ * Rejects when the service key is not configured; callers fall back to the
+ * rows they can already see rather than failing.
+ */
+export const fetchTakenVoucherNumbers = (dates: string[]) =>
+  request<TakenNumbers>("/api/vouchers/next-no", json({ dates }));
