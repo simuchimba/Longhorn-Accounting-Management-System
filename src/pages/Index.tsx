@@ -69,6 +69,7 @@ import {
   parseImportFile,
   type ImportDirection,
   type ParsedImportFile,
+  type ParsedImportRow,
   type ParsedImportSheet,
 } from "@/lib/spreadsheetImport";
 
@@ -1151,7 +1152,9 @@ const explainDeleteError = (error: { message?: string } | null): string => {
 
   const openImporter = (status: VoucherStatus) => {
     if (!canPrepare) { setNotice("Bulk import is reserved for preparers."); return; }
-    setImportStatus(status);
+    // Imported rows always land as pending approval; an approver releases them
+    // from the approver panel rather than at import time.
+    setImportStatus("Pending approval");
     // The department is the preparer's own branch, so there is nothing to choose
     // here. The picker defaulted to departments[0], which is how imported rows
     // came out as "General".
@@ -1163,8 +1166,24 @@ const explainDeleteError = (error: { message?: string } | null): string => {
     setShowImporter(true);
   };
 
+  const isDuplicateImportRow = (parsed: ParsedImportRow): boolean => {
+    const amount = Math.round(parsed.amount * 100) / 100;
+    const payee = parsed.paidTo.trim().toLowerCase();
+    const reference = parsed.reference.trim().toLowerCase();
+    return vouchers.some((voucher) => {
+      if (myCompanyId && voucher.companyId !== myCompanyId) return false;
+      if (reference && voucher.reference && voucher.reference.trim().toLowerCase() === reference) return true;
+      return (
+        voucher.date === parsed.date &&
+        Math.abs(voucher.amount - amount) < 0.005 &&
+        voucher.paidTo.trim().toLowerCase() === payee
+      );
+    });
+  };
+
   const buildImportRows = (sheet: ParsedImportSheet | undefined, defaults: typeof importDefaults): ImportRow[] =>
     (sheet?.rows ?? []).map((parsed) => {
+      const duplicate = !parsed.skipped && isDuplicateImportRow(parsed);
       const row: ImportRow = {
         key: parsed.key,
         sourceRow: parsed.sourceRow,
@@ -1180,8 +1199,8 @@ const explainDeleteError = (error: { message?: string } | null): string => {
         sourceStatus: parsed.sourceStatus,
         direction: parsed.direction,
         included: false,
-        skipped: parsed.skipped,
-        skipNote: parsed.skipNote,
+        skipped: parsed.skipped || duplicate,
+        skipNote: duplicate ? "Already in the ledger (duplicate)" : parsed.skipNote,
         warnings: parsed.warnings,
       };
       row.included = !row.skipped && !importRowError(row) && !/pending/i.test(parsed.sourceStatus) && (row.direction !== "receipt" || defaults.includeReceipts);
@@ -1261,7 +1280,7 @@ const explainDeleteError = (error: { message?: string } | null): string => {
     );
   };
 
-  const selectableImportRows = importRows.filter((row) => !row.skipped && !importRowError(row));
+  const selectableImportRows = importRows.filter((row) => !row.skipped && !importRowError(row) && !/pending/i.test(row.sourceStatus));
   const allImportRowsSelected = selectableImportRows.length > 0 && selectableImportRows.every((row) => row.included);
   const importSheet = importFile?.sheets.find((sheet) => sheet.name === importSheetName);
   const selectedImportRows = importRows.filter((row) => row.included && !importRowError(row));
@@ -1551,12 +1570,12 @@ const explainDeleteError = (error: { message?: string } | null): string => {
 
                   <div className="form-grid">
                     <label className="field">
-                      <span>Send imported rows to</span>
-                      <select value={importStatus} onChange={(event) => setImportStatus(event.target.value as VoucherStatus)}>
-                        <option>Pending approval</option>
-                        <option>Draft</option>
-                        <option>Approved</option>
-                      </select>
+                      <span>Imported rows land as</span>
+                      <div className="input-icon">
+                        <Clock3 size={15} />
+                        <Input value="Pending approval" readOnly />
+                      </div>
+                      <small className="field-hint">Released to approved from the approver panel.</small>
                     </label>
                     <label className="field">
                       <span>Approve with</span>
