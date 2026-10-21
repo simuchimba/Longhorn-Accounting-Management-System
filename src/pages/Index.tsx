@@ -1092,6 +1092,7 @@ const explainDeleteError = (error: { message?: string } | null): string => {
     reference: string;
     department: string;
     voucherNo: string;
+    sourceStatus: string;
     direction: ImportDirection;
     included: boolean;
     skipped: boolean;
@@ -1176,13 +1177,14 @@ const explainDeleteError = (error: { message?: string } | null): string => {
         reference: parsed.reference,
         department: parsed.department || defaults.department,
         voucherNo: parsed.voucherNo,
+        sourceStatus: parsed.sourceStatus,
         direction: parsed.direction,
         included: false,
         skipped: parsed.skipped,
         skipNote: parsed.skipNote,
         warnings: parsed.warnings,
       };
-      row.included = !row.skipped && !importRowError(row) && (row.direction !== "receipt" || defaults.includeReceipts);
+      row.included = !row.skipped && !importRowError(row) && !/pending/i.test(parsed.sourceStatus) && (row.direction !== "receipt" || defaults.includeReceipts);
       return row;
     });
 
@@ -1252,7 +1254,7 @@ const explainDeleteError = (error: { message?: string } | null): string => {
     setImportDefaults((current) => ({ ...current, includeReceipts: include }));
     setImportRows((rows) =>
       rows.map((row) => {
-        if (row.skipped) return row;
+        if (row.skipped || /pending/i.test(row.sourceStatus)) return row;
         if (row.direction === "receipt") return { ...row, included: include };
         return { ...row, included: !importRowError(row) };
       }),
@@ -1270,7 +1272,7 @@ const explainDeleteError = (error: { message?: string } | null): string => {
 
   const toggleAllImportRows = () => {
     const next = !allImportRowsSelected;
-    setImportRows((rows) => rows.map((row) => (!row.skipped && !importRowError(row) ? { ...row, included: next } : row)));
+    setImportRows((rows) => rows.map((row) => (!row.skipped && !importRowError(row) && !/pending/i.test(row.sourceStatus) ? { ...row, included: next } : row)));
   };
 
   /**

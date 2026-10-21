@@ -567,6 +567,16 @@ const buildRow = (
     return row;
   }
 
+  // A row whose own status already says "pending" represents work that is still
+  // open in the source sheet, so it must not be pulled in as part of a bulk
+  // import. It is left visible but unticked.
+  if (/\bpending\b/i.test(statusText)) {
+    row.skipped = true;
+    row.direction = "unknown";
+    row.skipNote = "Pending status - not imported";
+    return row;
+  }
+
   if (!row.date) row.error = "date";
   else if (row.amount <= 0) row.error = "amount";
   else if (!row.paidTo) row.error = "payee";
